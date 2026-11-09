@@ -1,0 +1,5 @@
+[2026-Feb-02 09:00:01.100000] Building docker image started.
+[2026-Feb-02 09:00:01.200000] To check the current progress, click on Show Debug Logs.
+[2026-Feb-02 09:00:06.300000]
+[COMMAND] docker exec builder bash -c 'bash /artifacts/build.sh'
+[OUTPUT] #0 building with "default" instance using docker driver  #1 [internal] load .dockerignore

@@ -1,0 +1,11 @@
+New container started.
+Waiting for healthcheck to pass on the new container.
+Healthcheck URL (inside the container): GET: http://localhost:3000/
+Attempt 5 of 5 | Healthcheck status: "unhealthy"
+Healthcheck logs: curl: (7) Failed to connect to localhost port 3000 after 0 ms: Connection refused
+ | Return code: 7
+Container logs:
+> app@1.0.0 start
+Listening on http://127.0.0.1:8080
+Removing old containers.
+New container is not healthy, rolling back to the old container.

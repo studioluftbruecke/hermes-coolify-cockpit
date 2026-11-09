@@ -1,0 +1,4 @@
+#11 [stage-0 6/10] RUN yarn install --frozen-lockfile
+#11 0.530 error my-app@1.0.0: The engine "node" is incompatible with this module. Expected version ">=22.12.0". Got "20.11.1"
+#11 0.541 error Found incompatible module.
+#11 ERROR: process "/bin/bash -ol pipefail -c yarn install --frozen-lockfile" did not complete successfully: exit code: 1

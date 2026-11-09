@@ -1,0 +1,295 @@
+"""The only module that knows how to talk to Coolify: REST over urllib and MCP JSON-RPC over HTTP.
+
+Every failure leaves as one typed `CoolifyError` whose `kind` says what went wrong, so callers
+branch on a value, not on status codes or exception classes:
+
+    unreachable     no HTTP answer (DNS, refused, TLS, timeout)
+    unauthorized    401: the token was rejected
+    forbidden       403 naming a missing right ("Missing required permissions: deploy");
+                    `ability` carries the right
+    scoped_refused  403 because the token is limited to selected projects or environments
+    not_found       404
+    rate_limited    429: Coolify's API rate limit; `retry_after` carries Retry-After in seconds
+    bad_request     any other 4xx (validation, method not allowed)
+    server          5xx, or an answer that is not what the endpoint promises
+
+Coolify's API rate limit (4.6.0, app/Providers/RouteServiceProvider.php): API_RATE_LIMIT requests
+per minute, 200 by default, counted per Coolify user, so every token of that user spends from one
+budget, and 403/404 answers count too. MCP calls (`/mcp`) sit outside that limiter. The client never
+retries a 429: Retry-After is up to a minute, a waiting request would hold a route thread (and the
+page's request) that long, and every retry spends from the budget that just ran out. The caller
+reports `rate_limited` with the wait instead, and the next poll or click asks again.
+
+The transport is injectable so tests replay recorded responses without a network.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import http.client
+import json
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Mapping, Optional
+
+DEFAULT_TIMEOUT = 15.0
+MAX_BODY_BYTES = 8 * 1024 * 1024
+MCP_PROTOCOL_VERSION = "2025-11-25"
+USER_AGENT = "hermes-coolify-cockpit"
+RATE_LIMIT_NOTE = ("Coolify allows API_RATE_LIMIT requests per minute (200 by default) per Coolify user, "
+                   "shared by all of that user's tokens.")
+
+_MISSING_RIGHT = re.compile(r"missing required permissions?:\s*([a-z:_]+)", re.IGNORECASE)
+_SCOPE_REFUSAL = "limited to selected"
+
+
+class ErrorKind(str, Enum):
+    UNREACHABLE = "unreachable"
+    UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
+    SCOPED_REFUSED = "scoped_refused"
+    NOT_FOUND = "not_found"
+    RATE_LIMITED = "rate_limited"
+    BAD_REQUEST = "bad_request"
+    SERVER = "server"
+
+
+class CoolifyError(Exception):
+    def __init__(self, kind: ErrorKind, message: str, *, status: Optional[int] = None,
+                 ability: Optional[str] = None, method: str = "", path: str = "",
+                 retry_after: Optional[int] = None):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+        self.status = status
+        self.ability = ability
+        self.method = method
+        self.path = path
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:
+        where = f" ({self.method} {self.path})" if self.path else ""
+        return f"{self.kind.value}: {self.message}{where}"
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    status: int
+    body: bytes
+    content_type: str = ""
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+
+# (method, url, headers, body, timeout) -> HttpResponse for any HTTP status.
+# Raises OSError (urllib.error.URLError, timeouts, resets) when no HTTP answer arrives.
+Transport = Callable[[str, str, Mapping[str, str], Optional[bytes], float], HttpResponse]
+
+
+def urllib_transport(method: str, url: str, headers: Mapping[str, str], body: Optional[bytes],
+                     timeout: float) -> HttpResponse:
+    request = urllib.request.Request(url, data=body, method=method, headers=dict(headers))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return HttpResponse(response.status, response.read(MAX_BODY_BYTES),
+                                response.headers.get("Content-Type", ""), dict(response.headers.items()))
+    except urllib.error.HTTPError as error:
+        payload = error.read(MAX_BODY_BYTES) if error.fp is not None else b""
+        content_type = error.headers.get("Content-Type", "") if error.headers else ""
+        return HttpResponse(error.code, payload, content_type, dict(error.headers.items()) if error.headers else {})
+    except http.client.HTTPException as error:  # a malformed answer counts as no answer
+        raise OSError(str(error)) from error
+
+
+def fingerprint(token: str) -> str:
+    """Short, stable, non-reversible label for a token (sha256, first 8 hex)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+
+
+def normalize_base_url(raw: str) -> str:
+    """`https://host/` or `https://host/api/v1` -> `https://host`; refuses anything but http(s)."""
+    url = (raw or "").strip().rstrip("/")
+    if url.endswith("/api/v1"):
+        url = url[: -len("/api/v1")]
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("the Coolify URL must start with http:// or https:// and name a host")
+    return url
+
+
+def _decode(body: bytes) -> Any:
+    text = body.decode("utf-8", "replace").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
+def _message(payload: Any) -> str:
+    if isinstance(payload, dict):
+        return str(payload.get("message") or payload.get("error") or "")[:300]
+    return str(payload or "")[:300]
+
+
+def retry_after_seconds(headers: Optional[Mapping[str, str]]) -> Optional[int]:
+    """Retry-After as whole seconds (Laravel sends a number), or None when absent or a date."""
+    for name, value in (headers or {}).items():
+        if name.lower() == "retry-after":
+            try:
+                return max(0, int(float(str(value).strip())))
+            except ValueError:
+                return None
+    return None
+
+
+def rate_limit_message(retry_after: Optional[int], upstream: str = "") -> str:
+    wait = f"try again in {retry_after} s" if retry_after is not None else "try again in a minute"
+    said = f' (HTTP 429 "{upstream}")' if upstream else " (HTTP 429)"
+    return f"Coolify is limiting API requests{said}; {wait}. {RATE_LIMIT_NOTE}"
+
+
+def error_for_status(status: int, payload: Any, method: str, path: str,
+                     headers: Optional[Mapping[str, str]] = None) -> CoolifyError:
+    message = _message(payload) or f"HTTP {status}"
+    if status == 401:
+        return CoolifyError(ErrorKind.UNAUTHORIZED, message, status=status, method=method, path=path)
+    if status == 403:
+        if _SCOPE_REFUSAL in message.lower():
+            return CoolifyError(ErrorKind.SCOPED_REFUSED, message, status=status, method=method, path=path)
+        missing = _MISSING_RIGHT.search(message)
+        return CoolifyError(ErrorKind.FORBIDDEN, message, status=status,
+                            ability=missing.group(1).lower() if missing else None, method=method, path=path)
+    if status == 404:
+        return CoolifyError(ErrorKind.NOT_FOUND, message, status=status, method=method, path=path)
+    if status == 429:
+        wait = retry_after_seconds(headers)
+        return CoolifyError(ErrorKind.RATE_LIMITED, rate_limit_message(wait, _message(payload)), status=status,
+                            method=method, path=path, retry_after=wait)
+    if 400 <= status < 500:
+        return CoolifyError(ErrorKind.BAD_REQUEST, message, status=status, method=method, path=path)
+    return CoolifyError(ErrorKind.SERVER, message, status=status, method=method, path=path)
+
+
+class LimitWatch:
+    """Wraps a transport and keeps the first 429 it passes through.
+
+    Builders that swallow single failed reads (a project detail, a count) wrap their transport in
+    one and call `raise_if_limited()` at the end: a result assembled while Coolify was refusing
+    requests is missing parts it would show as facts (\"0 applications\"), so it is not a result.
+    """
+
+    def __init__(self, inner: Transport):
+        self._inner = inner
+        self.limited: Optional[CoolifyError] = None
+
+    def __call__(self, method: str, url: str, headers: Mapping[str, str], body: Optional[bytes],
+                 timeout: float) -> HttpResponse:
+        response = self._inner(method, url, headers, body, timeout)
+        if response.status == 429 and self.limited is None:
+            path = urllib.parse.urlsplit(url).path
+            path = path[len("/api/v1"):] if path.startswith("/api/v1") else path
+            self.limited = error_for_status(429, _decode(response.body), method, path, response.headers)
+        return response
+
+    def raise_if_limited(self) -> None:
+        if self.limited is not None:
+            raise self.limited
+
+
+class CoolifyClient:
+    """One token against one instance. Holds the token; never puts it in a message or a URL."""
+
+    def __init__(self, base_url: str, token: str, *, timeout: float = DEFAULT_TIMEOUT,
+                 transport: Transport = urllib_transport):
+        self.base_url = normalize_base_url(base_url)
+        self._token = token
+        self.timeout = timeout
+        self._transport = transport
+        self._mcp_id = 0
+
+    def __repr__(self) -> str:
+        return f"CoolifyClient({self.base_url!r}, token=sha256:{fingerprint(self._token)})"
+
+    def _headers(self, extra: Optional[Mapping[str, str]] = None) -> dict[str, str]:
+        headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json",
+                   "User-Agent": USER_AGENT}
+        headers.update(extra or {})
+        return headers
+
+    def _send(self, method: str, url: str, path: str, headers: Mapping[str, str],
+              body: Optional[bytes]) -> HttpResponse:
+        try:
+            return self._transport(method, url, headers, body, self.timeout)
+        except OSError as error:
+            reason = getattr(error, "reason", None) or error
+            raise CoolifyError(ErrorKind.UNREACHABLE, str(reason),
+                               method=method, path=path) from None
+
+    def request(self, method: str, path: str, *, params: Optional[Mapping[str, Any]] = None,
+                json_body: Any = None) -> Any:
+        """REST call under `/api/v1`. Returns parsed JSON (or text); raises `CoolifyError`.
+        One request per call: a 429 raises `rate_limited` at once, it is never retried here."""
+        method = method.upper()
+        query = ("?" + urllib.parse.urlencode(params)) if params else ""
+        shown_path = path + query
+        body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+        extra = {"Content-Type": "application/json"} if body is not None else None
+        response = self._send(method, f"{self.base_url}/api/v1{path}{query}", shown_path,
+                              self._headers(extra), body)
+        payload = _decode(response.body)
+        if 200 <= response.status < 300:
+            return payload
+        raise error_for_status(response.status, payload, method, shown_path, response.headers)
+
+    def get(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+        return self.request("GET", path, params=params)
+
+    def post(self, path: str, params: Optional[Mapping[str, Any]] = None, json_body: Any = None) -> Any:
+        return self.request("POST", path, params=params, json_body={} if json_body is None else json_body)
+
+    def mcp_call(self, method: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+        """One JSON-RPC request to Coolify's MCP endpoint (`<base>/mcp`); returns `result`.
+
+        Coolify answers plain JSON without a session header (probe P6); an SSE `data:` line is
+        accepted as well. A JSON-RPC error becomes `CoolifyError(server)`.
+        """
+        self._mcp_id += 1
+        envelope = {"jsonrpc": "2.0", "id": self._mcp_id, "method": method, "params": dict(params or {})}
+        headers = self._headers({"Content-Type": "application/json",
+                                 "Accept": "application/json, text/event-stream",
+                                 "MCP-Protocol-Version": MCP_PROTOCOL_VERSION})
+        response = self._send("POST", f"{self.base_url}/mcp", "/mcp", headers,
+                              json.dumps(envelope).encode("utf-8"))
+        payload = _decode(response.body)
+        if not 200 <= response.status < 300:
+            raise error_for_status(response.status, payload, "POST", "/mcp", response.headers)
+        if isinstance(payload, str):
+            payload = next((json.loads(line[5:]) for line in payload.splitlines()
+                            if line.startswith("data:")), None)
+        if not isinstance(payload, dict):
+            raise CoolifyError(ErrorKind.SERVER, "the MCP endpoint did not answer JSON-RPC",
+                               status=response.status, method="POST", path="/mcp")
+        if "error" in payload:
+            raise CoolifyError(ErrorKind.SERVER, _message(payload["error"]) or "MCP error",
+                               status=response.status, method="POST", path="/mcp")
+        return payload.get("result")
+
+
+def fetch_public_json(url: str, *, timeout: float = DEFAULT_TIMEOUT,
+                      transport: Transport = urllib_transport) -> Any:
+    """GET a public JSON document (no token). Used for Coolify's release feed."""
+    try:
+        response = transport("GET", url, {"Accept": "application/json", "User-Agent": USER_AGENT},
+                             None, timeout)
+    except OSError as error:
+        raise CoolifyError(ErrorKind.UNREACHABLE, f"no answer from {urllib.parse.urlparse(url).netloc}",
+                           method="GET", path=url) from error
+    payload = _decode(response.body)
+    if not 200 <= response.status < 300:
+        raise error_for_status(response.status, payload, "GET", url, response.headers)
+    return payload

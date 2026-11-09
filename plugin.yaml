@@ -1,0 +1,42 @@
+name: coolify-cockpit
+version: "0.0.11"
+description: "Coolify Cockpit: operate your Coolify instance from Hermes. Detects what your API tokens may do (rights, scope, what they see) and tells you which cockpit features your token setup unlocks, which it does not and why. Reads one snapshot of servers (load), resources and deployments (running, recently failed) and the deployment history of any application, diagnoses a failed deployment from its log against a catalogue of common self-hosting failures, and runs lifecycle actions (deploy, force rebuild, restart, start, stop, cancel, rollback) with the action token only: each agent-initiated action asks for your approval in Hermes and is refused in unattended runs. The cockpit layout (widgets, three presets) is data the agent can rearrange on request with coolify_cockpit, which edits only the layout and never acts on Coolify. Says whether a Coolify update is out. Keeps COOLIFY.md, a notebook about your instance that you, the agent and the cockpit write (it notes version, server and token-rights changes by itself). Ships a skill for the agent, @coolify: context references for live state in one token, and registers its secret formats with Hermes' redaction. The Desktop half adds a Cockpit page (widgets for all of this, action buttons behind a confirm dialog, edit mode, a cockpit chat that drafts into a normal Hermes session), a status-bar chip and a palette command; it ships switched off."
+author: "Studio Luftbrücke"
+license: MIT
+requires_hermes: ">=0.23.0"
+provides_tools:
+  - coolify_capabilities
+  - coolify_overview
+  - coolify_deployments
+  - coolify_diagnose
+  - coolify_action
+  - coolify_cockpit
+  - coolify_notes
+provides_hooks:
+  - pre_tool_call
+  - post_approval_response
+config_schema:
+  COOLIFY_COCKPIT_URL:
+    type: string
+    label: "Coolify URL"
+    description: "The address you open Coolify at, e.g. https://coolify.example.com"
+  COOLIFY_COCKPIT_TOKEN:
+    type: secret
+    env: COOLIFY_COCKPIT_TOKEN
+    label: "Action token (or your only token)"
+    description: "A Coolify API token. Recommended: read + deploy, scoped to the environments the cockpit may act on. Any token works; the cockpit tells you what it unlocks. Actions use only this token."
+  COOLIFY_COCKPIT_READ_TOKEN:
+    type: secret
+    env: COOLIFY_COCKPIT_READ_TOKEN
+    label: "Overview token (optional)"
+    description: "A team-wide read-only Coolify token for server stats and the full resource list. Scoped tokens cannot read servers. Never used for actions."
+  check_updates:
+    type: boolean
+    default: true
+    label: "Check for Coolify updates"
+    description: "Compare your instance's version with the latest release Coolify publishes at cdn.coollabs.io."
+  agent_actions:
+    type: boolean
+    default: true
+    label: "Let the agent run actions"
+    description: "When on, the agent may deploy, restart, start, stop, cancel or roll back with the action token; every call asks for your approval in Hermes and is refused in cron jobs, webhooks and single-query runs. When off, only your own clicks in the cockpit run actions."

@@ -1,0 +1,6 @@
+#8 [stage-0 4/9] RUN nix-env -if .nixpacks/nixpkgs-1.nix && nix-collect-garbage -d
+#8 61.96 error:
+#8 61.96        … while evaluating the attribute 'drvPath'
+#8 61.96        error: undefined variable 'nodejs_24'
+#8 ERROR: process "/bin/bash -ol pipefail -c nix-env -if .nixpacks/nixpkgs-1.nix" did not complete successfully: exit code: 1
+Deployment failed. Removing the new version of your application.

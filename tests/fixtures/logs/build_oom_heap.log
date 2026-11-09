@@ -1,0 +1,6 @@
+#13 81.31 [info] [nitro] Building server
+#13 191.6 <--- Last few GCs --->
+#13 191.6 [52:0x6a1c000]   1029 ms: Mark-Compact 2010.1 (2085.4) -> 2004.3 (2087.1) MB
+#13 191.6 FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+#13 ERROR: process "/bin/bash -ol pipefail -c npm run build" did not complete successfully: exit code: 134
+Deployment failed. Removing the new version of your application.

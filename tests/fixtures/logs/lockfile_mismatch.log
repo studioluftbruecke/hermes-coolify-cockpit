@@ -1,0 +1,5 @@
+#11 [stage-0 7/11] RUN npm ci
+#11 4.43 npm ERR! code EUSAGE
+#11 4.43 npm ERR! `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.
+#11 4.43 npm ERR! Invalid: lock file's typescript@5.5.2 does not satisfy typescript@4.9.5
+#11 ERROR: process "/bin/bash -ol pipefail -c npm ci" did not complete successfully: exit code: 1

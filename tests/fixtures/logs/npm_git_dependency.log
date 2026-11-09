@@ -1,0 +1,6 @@
+#14 266.1 npm error code 128
+#14 266.1 npm error An unknown git error occurred
+#14 266.1 npm error command git --no-replace-objects ls-remote ssh://git@github.com/acme/private-lib.git
+#14 266.1 npm error git@github.com: Permission denied (publickey).
+#14 266.1 npm error fatal: Could not read from remote repository.
+#14 ERROR: process "/bin/sh -c npm ci" did not complete successfully: exit code: 128

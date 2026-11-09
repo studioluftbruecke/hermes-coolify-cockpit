@@ -1,0 +1,6 @@
+Importing git@github.com:acme/app.git:main (commit sha HEAD) to /artifacts/build-1.
+Cloning into '/artifacts/build-1'...
+git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+Please make sure you have the correct access rights
+Error code: 128

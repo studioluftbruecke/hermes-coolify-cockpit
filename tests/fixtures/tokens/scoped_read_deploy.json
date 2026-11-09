@@ -1,0 +1,269 @@
+{
+ "_source": "Shapes from Coolify 4.6.0 (probes P1, P9 to P13); values synthetic.",
+ "authenticated": true,
+ "routes": {
+  "GET /api/v1/applications/hermes-permission-probe-does-not-exist": [
+   404,
+   {
+    "message": "Application not found."
+   }
+  ],
+  "GET /api/v1/applications/hermes-permission-probe-does-not-exist/logs": [
+   403,
+   {
+    "message": "Missing required permissions: read:sensitive"
+   }
+  ],
+  "POST /api/v1/deploy?uuid=hermes-permission-probe-does-not-exist": [
+   404,
+   {
+    "message": "No resources found."
+   }
+  ],
+  "PATCH /api/v1/applications/hermes-permission-probe-does-not-exist": [
+   403,
+   {
+    "message": "Missing required permissions: write"
+   }
+  ],
+  "DELETE /api/v1/applications/hermes-permission-probe-does-not-exist": [
+   403,
+   {
+    "message": "Missing required permissions: delete"
+   }
+  ],
+  "GET /api/v1/projects/proj-shop": [
+   200,
+   {
+    "id": 1,
+    "uuid": "proj-shop",
+    "name": "shop",
+    "description": "",
+    "canvas_position": null,
+    "environments": [
+     {
+      "id": 10,
+      "uuid": "proj-shop-staging",
+      "name": "staging"
+     }
+    ],
+    "icon_path": null,
+    "icon_s3_storage_id": null,
+    "icon_storage_type": null,
+    "team_id": 0,
+    "created_at": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z"
+   }
+  ],
+  "GET /api/v1/projects/proj-blog": [
+   200,
+   {
+    "id": 2,
+    "uuid": "proj-blog",
+    "name": "blog",
+    "description": "",
+    "canvas_position": null,
+    "environments": [
+     {
+      "id": 20,
+      "uuid": "proj-blog-staging",
+      "name": "staging"
+     }
+    ],
+    "icon_path": null,
+    "icon_s3_storage_id": null,
+    "icon_storage_type": null,
+    "team_id": 0,
+    "created_at": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z"
+   }
+  ],
+  "GET /api/v1/projects/proj-docs": [
+   200,
+   {
+    "id": 3,
+    "uuid": "proj-docs",
+    "name": "docs",
+    "description": "",
+    "canvas_position": null,
+    "environments": [
+     {
+      "id": 30,
+      "uuid": "proj-docs-staging",
+      "name": "staging"
+     }
+    ],
+    "icon_path": null,
+    "icon_s3_storage_id": null,
+    "icon_storage_type": null,
+    "team_id": 0,
+    "created_at": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z"
+   }
+  ],
+  "GET /api/v1/projects/proj-landing": [
+   200,
+   {
+    "id": 4,
+    "uuid": "proj-landing",
+    "name": "landing",
+    "description": "",
+    "canvas_position": null,
+    "environments": [
+     {
+      "id": 40,
+      "uuid": "proj-landing-staging",
+      "name": "staging"
+     }
+    ],
+    "icon_path": null,
+    "icon_s3_storage_id": null,
+    "icon_storage_type": null,
+    "team_id": 0,
+    "created_at": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z"
+   }
+  ],
+  "GET /api/v1/projects/proj-pdf": [
+   200,
+   {
+    "id": 5,
+    "uuid": "proj-pdf",
+    "name": "pdf-tools",
+    "description": "",
+    "canvas_position": null,
+    "environments": [
+     {
+      "id": 50,
+      "uuid": "proj-pdf-staging",
+      "name": "staging"
+     }
+    ],
+    "icon_path": null,
+    "icon_s3_storage_id": null,
+    "icon_storage_type": null,
+    "team_id": 0,
+    "created_at": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z"
+   }
+  ],
+  "GET /api/v1/projects": [
+   200,
+   [
+    {
+     "id": 1,
+     "uuid": "proj-shop",
+     "name": "shop",
+     "description": ""
+    },
+    {
+     "id": 2,
+     "uuid": "proj-blog",
+     "name": "blog",
+     "description": ""
+    },
+    {
+     "id": 3,
+     "uuid": "proj-docs",
+     "name": "docs",
+     "description": ""
+    },
+    {
+     "id": 4,
+     "uuid": "proj-landing",
+     "name": "landing",
+     "description": ""
+    },
+    {
+     "id": 5,
+     "uuid": "proj-pdf",
+     "name": "pdf-tools",
+     "description": ""
+    }
+   ]
+  ],
+  "GET /api/v1/servers": [
+   403,
+   {
+    "message": "This API token is limited to selected projects, environments, or resources, so it cannot use this endpoint."
+   }
+  ],
+  "GET /api/v1/applications": [
+   200,
+   [
+    {
+     "uuid": "app-shop-staging",
+     "name": "shop-staging",
+     "status": "running:healthy",
+     "fqdn": "https://shop-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-shop-api-staging",
+     "name": "shop-api-staging",
+     "status": "running:healthy",
+     "fqdn": "https://shop-api-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-blog-staging",
+     "name": "blog-staging",
+     "status": "running:healthy",
+     "fqdn": "https://blog-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-docs-staging",
+     "name": "docs-staging",
+     "status": "running:healthy",
+     "fqdn": "https://docs-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-landing-staging",
+     "name": "landing-staging",
+     "status": "running:healthy",
+     "fqdn": "https://landing-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-pdf-tools-staging",
+     "name": "pdf-tools-staging",
+     "status": "running:healthy",
+     "fqdn": "https://pdf-tools-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-pdf-render-staging",
+     "name": "pdf-render-staging",
+     "status": "running:healthy",
+     "fqdn": "https://pdf-render-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    },
+    {
+     "uuid": "app-pdf-queue-staging",
+     "name": "pdf-queue-staging",
+     "status": "running:healthy",
+     "fqdn": "https://pdf-queue-staging.example.test",
+     "environment_id": 2,
+     "repository_project_id": null
+    }
+   ]
+  ],
+  "GET /api/v1/services": [
+   200,
+   []
+  ],
+  "GET /api/v1/databases": [
+   200,
+   []
+  ]
+ }
+}

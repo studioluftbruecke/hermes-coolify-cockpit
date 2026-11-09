@@ -1,0 +1,64 @@
+{
+ "_source": "Shapes from Coolify 4.6.0 and cdn.coollabs.io (probes P5, P6); values synthetic.",
+ "authenticated_routes": {
+  "GET /api/v1/version": [
+   200,
+   "4.6.0"
+  ],
+  "POST /mcp": [
+   200,
+   {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "resultType": "complete",
+     "protocolVersion": "2025-11-25",
+     "capabilities": {
+      "tools": {
+       "listChanged": false
+      },
+      "resources": {
+       "listChanged": false
+      },
+      "prompts": {
+       "listChanged": false
+      }
+     },
+     "serverInfo": {
+      "name": "Coolify",
+      "version": "0.3.0"
+     },
+     "instructions": "Coolify MCP for the authenticated team token."
+    }
+   }
+  ]
+ },
+ "public_routes": {
+  "GET https://cdn.coollabs.io/coolify/versions.json": [
+   200,
+   {
+    "stable": {
+     "coolify": {
+      "version": "4.7.1"
+     },
+     "helper": {
+      "version": "1.0.19"
+     },
+     "sentinel": {
+      "version": "1.1.3"
+     },
+     "sentinel-host": {
+      "version": "1.1.3"
+     },
+     "traefik": {
+      "v3.6": "3.6.1"
+     }
+    },
+    "preview": {},
+    "nightly": {},
+    "coolify": {},
+    "traefik": {}
+   }
+  ]
+ }
+}

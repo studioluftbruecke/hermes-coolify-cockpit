@@ -1,0 +1,3 @@
+time="2026-03-01T10:00:00Z" level=info msg="Configuration loaded from flags."
+time="2026-03-01T10:00:05Z" level=error msg="Router defined multiple times with different configurations in [web-app-1 web-app-2]" providerName=docker routerName=http-0-web
+time="2026-03-01T10:00:05Z" level=error msg="Router defined multiple times with different configurations in [web-app-1 web-app-2]" providerName=docker routerName=http-0-web

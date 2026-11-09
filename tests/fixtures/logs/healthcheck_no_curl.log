@@ -1,0 +1,8 @@
+New container started.
+Waiting for healthcheck to pass on the new container.
+Healthcheck URL (inside the container): GET: http://localhost:8080/
+Attempt 1 of 5 | Healthcheck status: "starting"
+Healthcheck logs: /bin/sh: 1: curl: not found
+/bin/sh: 1: wget: not found
+ | Return code: 1
+New container is not healthy, rolling back to the old container.

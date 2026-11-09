@@ -1,0 +1,6 @@
+2026-Jan-05 10:00:01.000000 Building docker image started.
+2026-Jan-05 10:00:01.000000 #12 [stage-0 8/10] RUN npm run build
+2026-Jan-05 10:01:40.000000 #12 98.20 Creating an optimized production build ...
+2026-Jan-05 10:03:10.000000 #12 188.4 Killed
+2026-Jan-05 10:03:10.000000 #12 ERROR: process "/bin/bash -ol pipefail -c npm run build" did not complete successfully: exit code: 137
+2026-Jan-05 10:03:11.000000 Deployment failed. Removing the new version of your application.

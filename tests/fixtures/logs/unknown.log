@@ -1,0 +1,6 @@
+#15 [stage-0 9/10] RUN bun run build
+#15 3.10 $ astro build
+#15 9.80 error: script "build" exited with code 1
+#15 ERROR: process "/bin/sh -c bun run build" did not complete successfully: exit code: 1
+Error type: RuntimeException
+Deployment failed. Removing the new version of your application.
