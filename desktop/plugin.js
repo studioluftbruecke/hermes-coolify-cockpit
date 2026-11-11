@@ -6,7 +6,7 @@
 // coolify_cockpit tool and this page edit the same file (every save is a compare-and-set on its
 // version; a 409 means someone else saved first). Actions are the user's own clicks: each one
 // opens a confirm dialog naming action, resource, environment and server, built from the route's
-// dry run, and runs only the action token. The cockpit chat is a normal Hermes session opened
+// dry run, and runs only the API token. The cockpit chat is a normal Hermes session opened
 // beside the page with a drafted question; nothing is ever sent without the user pressing send.
 //
 // Plain ESM, loaded uncompiled: jsx() calls, imports only @hermes/plugin-sdk, react and
@@ -447,13 +447,13 @@ function useRights() {
     const body = catalog.data || {}
     const specs = new Map((body.actions || []).map(spec => [spec.kind, spec]))
     const tokens = (caps.data && caps.data.tokens) || []
-    const actionToken = tokens.find(t => t.role === 'action' || t.role === 'single') || null
+    const actionToken = tokens.find(t => t.role === 'api' || t.role === 'single') || null
     const scope = parseScope(actionToken)
     const canAct = Boolean(body.action_token && body.action_token.deploy === true)
     const reason = canAct
       ? null
       : (body.unavailable && body.unavailable.message) ||
-        (body.action_token ? 'The action token lacks the deploy right, so the cockpit shows no action buttons.' : null)
+        (body.action_token ? 'The API token lacks deploy, so the cockpit shows no action buttons.' : null)
     const inScope = resource => {
       if (!canAct || !resource || !scope) return false
       if (scope.all) return true
@@ -512,9 +512,18 @@ function ActionConfirm() {
   const confirmRef = useRef(null)
   const cancelRef = useRef(null)
   const closeTimer = useRef(null)
+  const caps = useCapabilities()
+  // M5 "Redeploy what changed": one confirm for several apps. Each target gets its own dry run (the
+  // server plans and checks each, as for one click); the dialog lists them all, one click sends all.
   const plan = useQuery({
     queryKey: qk(profile, 'plan', pending && pending.at),
-    queryFn: () => rest('/actions', { method: 'POST', body: { kind: pending.kind, target: pending.target, params: pending.params, dry_run: true } }),
+    queryFn: async () => {
+      if (pending.bulk) {
+        const plans = await Promise.all(pending.bulk.map(b => rest('/actions', { method: 'POST', body: { kind: pending.kind, target: b.uuid, dry_run: true } })))
+        return { bulk: plans, label: plans[0] && plans[0].label, confirm_text: 'deploy ' + plans.map(p => p.target.name).join(' and '), target: {} }
+      }
+      return rest('/actions', { method: 'POST', body: { kind: pending.kind, target: pending.target, params: pending.params, dry_run: true } })
+    },
     enabled: Boolean(pending),
     retry: false,
     staleTime: Infinity
@@ -535,16 +544,46 @@ function ActionConfirm() {
   const target = (data && data.target) || {}
   const spec = ((catalog.data && catalog.data.actions) || []).find(a => a.kind === pending.kind)
   const kindLabel = (data && data.label) || (spec && spec.label) || pending.kind
-  const name = target.name || pending.resourceName || pending.target
+  const name = (data && data.bulk ? pending.resourceName : target.name) || pending.resourceName || pending.target
   const busy = sendState !== 'idle'
   const close = () => {
     if (sendState !== 'sending') $pending.set(null)
+  }
+  const sendBulk = async () => {
+    const sent = []
+    for (const p of data.bulk) {
+      const result = await rest('/actions', { method: 'POST', body: { kind: pending.kind, target: p.target.uuid } })
+      sent.push({
+        id: pending.at + '-' + p.target.uuid,
+        kind: result.kind || pending.kind,
+        label: kindLabel,
+        resourceName: p.target.name,
+        resourceUuid: p.target.uuid,
+        deploymentUuid: result.deployment_uuid || null,
+        message: result.message || '',
+        sentAt: new Date().toISOString(),
+        mine: true,
+        done: !result.deployment_uuid
+      })
+    }
+    log('bulk sent', { kind: pending.kind, count: sent.length })
+    $tracked.set(sent.concat($tracked.get()).slice(0, 8))
+    void client.invalidateQueries({ queryKey: qk(profile, 'snapshot') })
   }
   const send = async () => {
     if (!ready || busy) return
     setSendError(null)
     setSendState('sending')
     try {
+      if (data.bulk) {
+        await sendBulk()
+        setSendState('sent')
+        closeTimer.current = window.setTimeout(() => {
+          closeTimer.current = null
+          $pending.set(null)
+        }, 600)
+        return
+      }
       const result = await rest('/actions', { method: 'POST', body: { kind: pending.kind, target: pending.target, params: pending.params } })
       log('action sent', { kind: result.kind, deployment: result.deployment_uuid, ok: result.ok })
       $tracked.set(
@@ -558,6 +597,7 @@ function ActionConfirm() {
             deploymentUuid: result.deployment_uuid || null,
             message: result.message || '',
             sentAt: new Date().toISOString(),
+            mine: true,
             done: !result.deployment_uuid
           }
         ].concat($tracked.get().slice(0, 4))
@@ -585,10 +625,27 @@ function ActionConfirm() {
           ? el('div', { style: { ...S.small, marginTop: 4 } }, error.body.hint)
           : undefined
     )
+  const protectedEnv = env => isProtected(caps, env)
   const body = checking
     ? el('div', { style: S.col(6) }, el(Skeleton, { style: { height: 14, width: '70%' } }), el(Skeleton, { style: { height: 14, width: '50%' } }))
     : checkFailed
       ? failure(plan.error)
+      : data && data.bulk
+      ? el(
+          'div',
+          { 'data-cc-bulk': data.bulk.length, style: S.col(6) },
+          ...data.bulk.map(p =>
+            el(
+              'div',
+              { key: p.target.uuid, style: S.row(8) },
+              el(StatusDot, { tone: protectedEnv(p.target.environment) ? 'bad' : 'muted' }),
+              el('span', { style: S.strong }, p.target.name),
+              el(Badge, { size: 'xs', variant: protectedEnv(p.target.environment) ? 'destructive' : 'outline' }, p.target.environment || 'unknown'),
+              el(Small, {}, p.target.server || '')
+            )
+          ),
+          data.bulk.some(p => protectedEnv(p.target.environment)) ? el(Note, { tone: 'bad' }, 'This includes a protected environment.') : null
+        )
       : el(
           'div',
           { style: S.col(6) },
@@ -601,14 +658,15 @@ function ActionConfirm() {
           data && data.request ? el(PlanLine, { name: 'Request', value: el('span', { style: S.mono }, data.request.method + ' ' + data.request.path + paramText(data.request.params)) }) : null,
           pending.kind === 'stop'
             ? el(Note, { tone: 'warn' }, 'Stop takes the app offline until you start it again. The cockpit always sends docker_cleanup=false.')
-            : null
+            : null,
+          protectedEnv(target.environment) ? el(Note, { tone: 'bad' }, 'This is ' + target.environment + '.') : null
         )
   const description = ready
     ? 'Coolify will ' + data.confirm_text + '.'
     : checkFailed
       ? 'The check did not finish, so nothing can be sent yet.'
       : 'Checking what this click would do.'
-  const confirmLabel = sendState === 'sending' ? 'Sending' : sendState === 'sent' ? 'Sent' : kindLabel + ' ' + (name.length > 28 ? 'now' : name)
+  const confirmLabel = sendState === 'sending' ? 'Sending' : sendState === 'sent' ? 'Sent' : data && data.bulk ? 'Redeploy ' + data.bulk.length + ' apps' : kindLabel + ' ' + (name.length > 28 ? 'now' : name)
   return el(
     Dialog,
     { onOpenChange: open => !open && close(), open: true },
@@ -633,7 +691,7 @@ function ActionConfirm() {
       el(
         DialogHeader,
         {},
-        el(DialogTitle, {}, kindLabel + ': ' + name),
+        el(DialogTitle, {}, data && data.bulk ? 'Redeploy ' + name : kindLabel + ': ' + name),
         el(DialogDescription, {}, description)
       ),
       body,
@@ -675,6 +733,8 @@ function TrackedAction({ item }) {
     if (row && TERMINAL.has(row.status) && !item.done) {
       $tracked.set($tracked.get().map(t => (t.id === item.id ? { ...t, done: true, status: row.status } : t)))
       log('deployment ended', { uuid: row.uuid, status: row.status })
+      // M5 follow-through: a deploy he started that fails opens its diagnosis without a click.
+      if (row.status === 'failed' && item.mine) $diagnose.set({ ...row, resource_name: item.resourceName, resource_uuid: item.resourceUuid, at: Date.now(), followed: true })
     }
   }, [row && row.status])
   const tone = item.deploymentUuid ? deploymentTone(status) : 'good'
@@ -893,7 +953,7 @@ const RIGHTS = ['read', 'read:sensitive', 'deploy', 'write', 'delete']
 function TokenBlock({ token, showProjects }) {
   const held = new Set(token.rights || [])
   const sees = token.sees || {}
-  const roleName = token.role === 'action' ? 'Action token' : token.role === 'overview' ? 'Overview token' : 'Token'
+  const roleName = token.role === 'api' ? 'API token' : token.role === 'read_only' ? 'Read-only token' : 'Token'
   const tone = token.status === 'ok' ? 'good' : token.status === 'unauthorized' ? 'bad' : 'warn'
   return el(
     'div',
@@ -941,6 +1001,36 @@ function featureName(text) {
   return i > 0 ? { id: s.slice(0, i), label: s.slice(i + 2) } : { id: s, label: s }
 }
 
+// The one line a saved setup shows (capabilities.result_line): scope, rights, what it reaches.
+// A limited token offers the read-only token; write or delete adds one amber chip.
+function SetupResult({ setup, compact }) {
+  const profile = useProfile()
+  if (!setup || !setup.line) return null
+  const tone = setup.tone === 'bad' ? T.red : setup.tone === 'warn' ? T.yellow : T.green
+  return el(
+    'div',
+    { 'data-cc-setup-result': setup.tone, style: { ...S.row(8), flexWrap: 'wrap' } },
+    el(StatusDot, { tone: setup.tone === 'bad' ? 'bad' : setup.tone === 'warn' ? 'warn' : 'good' }),
+    el('span', { style: { ...S.strong, color: compact ? T.primary : tone === T.green ? T.primary : tone } }, setup.line),
+    setup.chip ? el('span', { title: setup.chip_detail || '' }, el(Badge, { variant: 'warn' }, setup.chip)) : null,
+    setup.add_read_token
+      ? el(Button, { onClick: () => host.navigate(settingsHref(profile)), size: 'xs', variant: 'outline' }, el(Codicon, { name: 'add', size: '0.75rem' }), 'Add a read-only token')
+      : null
+  )
+}
+
+function ProtectedLine({ protectedEnvs }) {
+  if (!protectedEnvs) return null
+  const names = protectedEnvs.environments || []
+  return el(
+    Small,
+    {},
+    el(Codicon, { name: 'lock', size: '0.7rem' }), ' ',
+    names.length ? 'Protected: ' + names.join(', ') + '. ' : 'No protected environments. ',
+    protectedEnvs.agent_allowed ? 'The agent may act there; each action asks you.' : 'The agent may not act there; your own clicks work.'
+  )
+}
+
 function ConnectionWidget({ widget }) {
   const caps = useCapabilities()
   const props = widget.props || {}
@@ -951,6 +1041,8 @@ function ConnectionWidget({ widget }) {
   return el(
     'div',
     { style: S.col(10) },
+    el(SetupResult, { setup: data.setup }),
+    el(ProtectedLine, { protectedEnvs: data.protected }),
     el(
       'div',
       { style: S.row(8) },
@@ -974,7 +1066,7 @@ function ConnectionWidget({ widget }) {
           { style: { ...S.row(4), flexWrap: 'wrap' } },
           ...(data.available || []).map(text => {
             const f = featureName(text)
-            const via = f.label.match(/^(.*) \((via [a-z]+ token)\)$/)
+            const via = f.label.match(/^(.*) \((via the [a-z-]+ token)\)$/)
             return el(
               'span',
               { key: f.id, title: f.label, style: { ...S.row(4), borderRadius: 4, padding: '2px 6px', background: tint(T.green, 10), color: T.primary, fontSize: '0.6875rem' } },
@@ -1008,128 +1100,213 @@ function ConnectionWidget({ widget }) {
   )
 }
 
-// ── servers ──────────────────────────────────────────────────────────────────────────────────────
+// ── 0.1.0 shared: the attention data (fleet.py) ─────────────────────────────────────────────────
+//
+// The backend's Attention list is the only place a count comes from. Every block below reads
+// snap.attention, snap.summary and snap.fleet; nothing counts on its own.
 
-function Sparkline({ points, label, domain }) {
-  const values = (points || []).map(p => (Array.isArray(p) ? p[1] : p)).filter(v => typeof v === 'number' && Number.isFinite(v))
-  if (values.length < 2) return el(Small, {}, 'no history')
-  const w = 120
-  const h = 28
-  // A fixed domain (0-100 % for CPU and disk, 0-total for RAM) keeps a flat line flat; auto-scaled
-  // series get a minimum span so sensor noise does not draw as a cliff.
-  let min = domain ? domain[0] : Math.min(...values)
-  let max = domain ? domain[1] : Math.max(...values)
-  if (!domain) {
-    const floor = Math.max(Math.abs(max) * 0.25, 1e-6)
-    if (max - min < floor) {
-      const mid = (max + min) / 2
-      min = Math.max(0, mid - floor / 2)
-      max = min + floor
-    }
-  }
-  const span = max - min || 1
-  const xy = values.map((v, i) => [(i / (values.length - 1)) * w, h - 2 - ((Math.min(max, Math.max(min, v)) - min) / span) * (h - 4)])
-  const line = xy.map(([x, y]) => x.toFixed(1) + ',' + y.toFixed(1)).join(' ')
-  const area = '0,' + h + ' ' + line + ' ' + w + ',' + h
-  return el(
-    'svg',
-    { 'aria-label': label, height: h, preserveAspectRatio: 'none', role: 'img', style: { width: '100%', height: h, display: 'block' }, viewBox: '0 0 ' + w + ' ' + h },
-    el('polygon', { points: area, style: { fill: tint(T.accent, 14), stroke: 'none' } }),
-    el('polyline', { points: line, style: { fill: 'none', stroke: T.accent, strokeWidth: 1.5, vectorEffect: 'non-scaling-stroke' } })
-  )
+const $focus = atom(null) // the attention signal the summary chips filter the Apps list by
+const $openApp = atom(null) // { uuid, at }: the app row whose history is open (Diagnose, follow-through)
+
+function signalCount(data, signal) {
+  const row = ((data && data.summary) || []).find(s => s.signal === signal)
+  return row ? row.count : 0
 }
 
-const METRICS = {
-  cpu: { label: 'CPU', value: c => pct(c.cpu_percent), series: 'cpu_percent', domain: () => [0, 100] },
-  ram: { label: 'RAM', value: c => bytes(c.memory_used_bytes) + ' of ' + bytes(c.memory_total_bytes), series: 'memory_used_bytes', domain: c => (c.memory_total_bytes ? [0, c.memory_total_bytes] : null) },
-  disk: { label: 'Disk', value: c => pct(c.disk_used_percent) + ' of ' + bytes(c.disk_total_bytes), series: 'disk_used_percent', domain: () => [0, 100] },
-  load: { label: 'Load', value: c => (typeof c.load1 === 'number' ? c.load1.toFixed(2) : '?'), series: 'load1', domain: () => null },
-  network: { label: 'Network in / out', value: c => rate(c.network_rx_bytes_per_sec) + ' / ' + rate(c.network_tx_bytes_per_sec), series: 'network_rx_bytes_per_sec', domain: () => null }
+function attentionFor(data, uuid) {
+  return ((data && data.attention) || []).filter(a => a.resource_uuid === uuid)
 }
 
-function ServerCard({ server, metrics, history }) {
-  const m = server.metrics
-  const current = (m && m.current) || {}
-  const series = (m && m.series) || {}
-  const tone = !server.reachable ? 'bad' : !server.usable ? 'warn' : 'good'
-  return el(
-    'div',
-    { style: { ...S.col(8), ...S.box } },
-    el(
-      'div',
-      { style: S.row(8) },
-      el(StatusDot, { tone }),
-      el('span', { style: S.strong }, server.name),
-      el(Small, {}, server.reachable ? (server.usable ? 'reachable' : 'reachable, not usable') : 'unreachable'),
-      el('span', { style: { flex: 1 } }),
-      el(AskButton, { kind: 'server', item: server })
-    ),
-    m
-      ? el(
-          'div',
-          { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 } },
-          ...metrics.map(id => {
-            const spec = METRICS[id]
-            return el(
-              'div',
-              { key: id, style: S.col(2) },
-              el('span', { style: S.label }, spec.label),
-              el('span', { style: { ...S.text, ...S.mono, color: T.primary, ...S.ellipsis }, title: spec.value(current) }, spec.value(current)),
-              history ? el(Sparkline, { domain: spec.domain(current), points: series[spec.series], label: spec.label + ' over the last hour' }) : null
-            )
-          })
-        )
-      : el(
-          Small,
-          {},
-          server.metrics_enabled === false
-            ? 'No metrics: Sentinel metrics are off for this server. Turn them on in Coolify (Servers, ' + server.name + ', Sentinel).'
-            : 'No metrics in this snapshot' + (server.metrics_error ? ': ' + server.metrics_error : '.')
-        )
-  )
+function protectedSet(caps) {
+  const envs = ((caps && caps.data && caps.data.protected) || {}).environments
+  return new Set((envs || ['production']).map(e => String(e).toLowerCase()))
 }
 
-function ServersWidget({ widget }) {
+function isProtected(caps, environment) {
+  return protectedSet(caps).has(String(environment || '').toLowerCase())
+}
+
+function joinResources(deployments, resources) {
+  const byUuid = new Map((resources || []).map(r => [r.uuid, r]))
+  return (deployments || []).map(d => ({ ...d, resource: byUuid.get(d.resource_uuid) || null }))
+}
+
+function deploymentFilter(props) {
+  return d =>
+    (!props.project || (d.resource && matches(d.resource.project, props.project))) &&
+    (!props.environment || String((d.resource && d.resource.environment) || d.environment || '').toLowerCase() === String(props.environment).toLowerCase())
+}
+
+const SIGNAL_TONE = { bad: 'bad', warn: 'warn', info: 'muted' }
+const BADGE_VARIANT = { bad: 'destructive', warn: 'warn', info: 'outline' }
+
+// ── summary ──────────────────────────────────────────────────────────────────────────────────────
+
+function lastDeployAgo(data) {
+  const done = ((data && data.latest_deployments) || []).find(d => d.status === 'finished')
+  return done ? ago(done.finished_at || done.created_at) : null
+}
+
+function SummaryWidget({ widget }) {
   const snap = useSnapshot()
-  const caps = useCapabilities()
+  const rights = useRights()
+  const focus = useValue($focus)
   const props = widget.props || {}
-  if (snap.isLoading) return el(Loading, { rows: 4 })
+  if (snap.isLoading) return el(Loading, { rows: 1 })
   if (snap.error) return el(QueryError, { error: snap.error, what: 'Snapshot' })
-  const wanted = (props.servers || []).map(s => s.toLowerCase())
-  const servers = (snap.data.servers || []).filter(s => !wanted.length || wanted.includes(String(s.name).toLowerCase()))
-  const metrics = props.metrics && props.metrics.length ? props.metrics : ['cpu', 'ram', 'disk', 'load', 'network']
-  const missing = ((caps.data && caps.data.not_available) || []).find(row => /^servers?(_stats)?:/.test(row.feature || ''))
-  if (!servers.length) {
+  const data = snap.data || {}
+  const only = new Set(props.signals || [])
+  const rows = (data.summary || []).filter(s => !only.size || only.has(s.signal))
+  const running = ((data.deployments || {}).running || []).length
+  const apps = (data.resources || []).filter(r => r.kind === 'application').length
+  const changed = (data.attention || []).filter(a => a.signal === 'env_changed' && a.resource_uuid)
+  const resources = new Map((data.resources || []).map(r => [r.uuid, r]))
+  const redeployable = changed.map(a => resources.get(a.resource_uuid)).filter(r => r && rights.allows('deploy', r))
+  if (!rows.length && !running) {
+    const last = lastDeployAgo(data)
     return el(
       'div',
-      { style: S.col(6) },
-      el(EmptyState, { title: 'No servers to show', description: missing ? plain(missing.reason) : 'The reading token returned no servers.' }),
-      missing && missing.unlock ? el(Small, {}, 'To see servers: ' + plain(missing.unlock) + '.') : null
+      { 'data-cc-summary': 'clear', style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(StatusDot, { tone: 'good' }),
+      el('span', { style: { ...S.text, color: T.primary } }, apps + ' apps healthy' + (last ? ', last deploy ' + last : ''))
     )
   }
   return el(
     'div',
-    { style: S.col(8) },
-    ...servers.map(server => el(ServerCard, { key: server.uuid, server, metrics, history: props.history !== false })),
-    ...(snap.data.limits || []).map((text, i) => el(Small, { key: 'l' + i }, text))
+    { 'data-cc-summary': 'attention', style: { ...S.row(8), flexWrap: 'wrap' } },
+    ...rows.map(s =>
+      el(
+        Button,
+        {
+          key: s.signal,
+          'aria-pressed': focus === s.signal,
+          onClick: () => $focus.set(focus === s.signal ? null : s.signal),
+          size: 'xs',
+          title: focus === s.signal ? 'Show all apps' : 'Show only these in Apps',
+          variant: focus === s.signal ? 'default' : 'chip'
+        },
+        el(StatusDot, { tone: SIGNAL_TONE[s.severity] || 'muted' }),
+        el('b', {}, String(s.count)),
+        ' ' + s.label
+      )
+    ),
+    running ? el('span', { style: { ...S.row(4), ...S.text } }, el(StatusDot, { tone: 'warn' }), el('b', {}, String(running)), ' deploying') : null,
+    focus ? el(Button, { onClick: () => $focus.set(null), size: 'xs', variant: 'ghost' }, 'Show all') : null,
+    el('span', { style: { flex: 1 } }),
+    props.redeploy_changed !== false && redeployable.length
+      ? el(
+          Button,
+          {
+            onClick: () =>
+              requestAction('deploy', redeployable[0].uuid, {
+                bulk: redeployable.map(r => ({ uuid: r.uuid, name: r.name, environment: r.environment })),
+                resourceName: redeployable.length + (redeployable.length === 1 ? ' app' : ' apps') + ' with changed env'
+              }),
+            size: 'xs',
+            variant: 'secondary'
+          },
+          'Redeploy ' + redeployable.length + (redeployable.length === 1 ? ' app' : ' apps') + ' with changed env'
+        )
+      : null
   )
 }
 
-// ── resources ────────────────────────────────────────────────────────────────────────────────────
+// ── latest deploys ───────────────────────────────────────────────────────────────────────────────
 
-const STATUS_FILTERS = [
-  { id: 'any', label: 'All' },
-  { id: 'running', label: 'Running' },
-  { id: 'unhealthy', label: 'Unhealthy' },
-  { id: 'stopped', label: 'Stopped' }
-]
+function lastGoodText(row) {
+  const good = row && row.last_good
+  if (!good || !good.commit || good.commit === 'HEAD') return null
+  return shortSha(good.commit) + ', last good' + (good.finished_at ? ' ' + ago(good.finished_at) : '')
+}
 
-function statusMatches(status, filter) {
+function RollbackButton({ resource, row, rights }) {
+  const good = row && row.last_good
+  if (!resource || !good || !good.commit || good.commit === 'HEAD' || !rights.allows('rollback', resource)) return null
+  return el(ActionButton, {
+    kind: 'rollback',
+    label: 'Roll back to ' + shortSha(good.commit),
+    params: { commit: good.commit },
+    resource,
+    rights,
+    target: resource.uuid,
+    variant: 'secondary'
+  })
+}
+
+function LatestRow({ d, rights, fleet, open, onDiagnose }) {
+  const r = d.resource
+  const row = fleet[d.resource_uuid]
+  const failedNow = d.status === 'failed' && !d.superseded
+  const running = !TERMINAL.has(String(d.status || ''))
+  const word = d.superseded ? 'failed, fixed since' : String(d.status || '').replace('_', ' ')
+  const canCancel = running && r && rights.allows('cancel', r)
+  return el(
+    'div',
+    { 'data-cc-deploy': d.uuid, style: { ...S.col(6), padding: '6px 0', ...S.hair, opacity: d.superseded ? 0.55 : 1 } },
+    el(
+      'div',
+      { style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(StatusDot, { tone: deploymentTone(d.status), title: word }),
+      el('span', { style: { ...S.strong, ...S.ellipsis, maxWidth: 220 } }, d.resource_name || 'unknown'),
+      el(Badge, { size: 'xs', variant: 'outline' }, d.environment || (r && r.environment) || '?'),
+      el(Small, { style: { color: failedNow ? T.red : T.tertiary } }, word),
+      el(Small, { style: { ...S.ellipsis, flex: 1, minWidth: 120 } }, firstLine(d.commit_message) || shortSha(d.commit) || ''),
+      d.trigger ? el(Small, {}, d.trigger) : null,
+      d.finished_at ? el(Small, { style: S.mono }, duration(d.created_at, d.finished_at)) : null,
+      el(Small, { style: { ...S.mono, minWidth: 64, textAlign: 'right' } }, ago(d.created_at)),
+      canCancel ? el(ActionButton, { kind: 'cancel', target: d.uuid, resource: r, deployment: d.uuid, rights, label: 'Cancel', variant: 'outline' }) : null,
+      failedNow ? el(RollbackButton, { resource: r, row, rights }) : null,
+      failedNow ? el(Button, { 'aria-expanded': open, onClick: onDiagnose, size: 'xs', variant: open ? 'default' : 'secondary' }, el(Codicon, { name: 'debug', size: '0.75rem' }), 'Diagnose') : null,
+      d.url ? el(ExternalLink, { href: d.url }, el(Codicon, { name: 'link-external', size: '0.7rem' })) : null
+    ),
+    open ? el('div', { style: { paddingLeft: 16 } }, el(DiagnosisPanel, { deployment: d, pasteBox: true })) : null
+  )
+}
+
+function DeploymentsWidget({ widget }) {
+  const snap = useSnapshot()
+  const rights = useRights()
+  const selected = useValue($diagnose)
+  const props = widget.props || {}
+  if (snap.isLoading) return el(Loading, { rows: 4 })
+  if (snap.error) return el(QueryError, { error: snap.error, what: 'Snapshot' })
+  const data = snap.data || {}
+  const keep = deploymentFilter(props)
+  const show = props.show || 'all'
+  const fleet = data.fleet || {}
+  let rows = joinResources(data.latest_deployments || [], data.resources).filter(keep)
+  if (show === 'failed') rows = rows.filter(d => d.status === 'failed')
+  if (show === 'running') rows = rows.filter(d => !TERMINAL.has(String(d.status || '')))
+  rows = rows.slice(0, props.limit || 8)
+  if (data.latest_deployments == null) {
+    return el(Small, {}, ((data.limits || []).find(t => /MCP/.test(t)) || 'No deployment list in this snapshot.'))
+  }
+  if (!rows.length) return el(Small, {}, 'No deploys to show.')
+  return el(
+    'div',
+    { style: { ...S.col(0), maxHeight: widget.size === 'l' ? 560 : 380, overflowY: 'auto' } },
+    ...rows.map(d =>
+      el(LatestRow, {
+        key: d.uuid,
+        d,
+        fleet,
+        open: Boolean(selected && selected.uuid === d.uuid),
+        onDiagnose: () => $diagnose.set(selected && selected.uuid === d.uuid ? null : { ...d, at: Date.now() }),
+        rights
+      })
+    )
+  )
+}
+
+// ── apps ─────────────────────────────────────────────────────────────────────────────────────────
+
+function statusMatches(status, filter, attention) {
   const s = String(status || '')
   if (!filter || filter === 'any') return true
   if (filter === 'running') return s.startsWith('running')
-  if (filter === 'unhealthy') return s.includes('unhealthy')
+  if (filter === 'unhealthy') return s.includes('unhealthy') && !s.startsWith('exited')
   if (filter === 'stopped') return s.startsWith('exited') || s.startsWith('stopped')
+  if (filter === 'attention') return attention.length > 0
   return true
 }
 
@@ -1150,151 +1327,350 @@ function HistoryRows({ resource }) {
         el(Small, { style: { ...S.mono, color: T.secondary } }, shortSha(d.commit) || '?'),
         el(Small, { style: { ...S.ellipsis, flex: 1 } }, firstLine(d.commit_message) || d.status),
         el(Small, {}, ago(d.created_at) + (d.finished_at ? ', ' + duration(d.created_at, d.finished_at) : '')),
+        d.status === 'failed' ? el(Button, { onClick: () => $diagnose.set({ ...d, resource_name: resource.name, at: Date.now() }), size: 'xs', variant: 'ghost' }, 'Diagnose') : null,
         d.url ? el(ExternalLink, { href: d.url }, el(Codicon, { name: 'link-external', size: '0.7rem' })) : null
       )
     )
   )
 }
 
-function ResourceRow({ resource, rowActions, rights, showEnvKeys }) {
-  const [open, setOpen] = useState(false)
+function SignalBadges({ items }) {
+  return el(
+    'span',
+    { style: { ...S.row(4), flexWrap: 'wrap' } },
+    ...items.map(a => el('span', { key: a.signal, 'data-cc-badge': a.signal }, el(Badge, { size: 'xs', title: a.title, variant: BADGE_VARIANT[a.severity] || 'outline' }, a.badge || a.label || a.signal)))
+  )
+}
+
+function AppRow({ resource, row, items, rowActions, rights, locked, showEnvKeys }) {
+  const open = useValue($openApp)
+  const isOpen = Boolean(open && open.uuid === resource.uuid)
+  const failing = row && row.state === 'failing'
+  const running = row && row.state === 'deploying'
   const actions = (rowActions || []).filter(kind => rights.allows(kind, resource))
-  const fqdn = String(resource.fqdn || '').split(',')[0]
+  const deployed = row && row.last_good // what runs: the last finished deploy (none known: no commit shown)
   return el(
     'div',
-    { style: { ...S.col(6), padding: '6px 0', ...S.hair } },
+    { 'data-cc-app': resource.uuid, style: { ...S.col(6), padding: '6px 0', ...S.hair } },
     el(
       'div',
-      { style: S.row(8) },
-      el(StatusDot, { tone: resourceTone(resource.status), title: resource.status }),
-      el('div', { style: { ...S.col(0), flex: 1 } },
-        el('div', { style: S.row(6) }, el('span', { style: { ...S.strong, ...S.ellipsis } }, resource.name), el(Badge, { size: 'xs', variant: 'outline' }, resource.kind)),
-        el(Small, { style: S.ellipsis }, resource.project + ' / ' + resource.environment + ' · ' + String(resource.status || '').replace(':', ', '))
+      { style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(StatusDot, { tone: failing ? 'bad' : running ? 'warn' : resourceTone(resource.status), title: (row && row.state) || resource.status }),
+      el(
+        'button',
+        {
+          'aria-expanded': isOpen,
+          onClick: () => $openApp.set(isOpen ? null : { uuid: resource.uuid, at: Date.now() }),
+          style: { ...S.strong, ...S.ellipsis, maxWidth: 260, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' },
+          title: resource.kind === 'application' ? 'Deployment history' : resource.kind,
+          type: 'button'
+        },
+        resource.name
       ),
-      fqdn ? el(ExternalLink, { href: fqdn }, el(Small, { style: { color: T.accent, maxWidth: 220, ...S.ellipsis, display: 'inline-block' } }, hostOf(fqdn))) : null,
+      resource.kind !== 'application' ? el(Badge, { size: 'xs', variant: 'outline' }, resource.kind) : null,
+      locked ? el(Codicon, { name: 'lock', size: '0.7rem', title: 'Protected: the agent may not act here', style: { color: T.tertiary } }) : null,
+      el(SignalBadges, { items }),
+      el('span', { style: { flex: 1 } }),
+      deployed && deployed.commit && deployed.commit !== 'HEAD' ? el(Small, { style: S.mono, title: 'Deployed commit' }, shortSha(deployed.commit)) : null,
+      deployed ? el(Small, { style: { ...S.mono, minWidth: 64, textAlign: 'right' } }, ago(deployed.finished_at || deployed.created_at)) : null,
+      failing ? el(RollbackButton, { resource, row, rights }) : null,
       ...actions.map(kind => el(ActionButton, { key: kind, kind, target: resource.uuid, resource, rights })),
-      el(AskButton, { kind: 'resource', item: resource }),
-      resource.kind === 'application' ? el(IconButton, { icon: open ? 'chevron-up' : 'history', label: open ? 'Hide history' : 'Deployment history', onClick: () => setOpen(!open) }) : null
+      el(AskButton, { kind: 'resource', item: resource })
     ),
-    open ? el('div', { style: { paddingLeft: 16 } }, el(HistoryRows, { resource })) : null,
-    showEnvKeys && open ? el(Small, { style: { paddingLeft: 16 } }, 'Env key names are not in the snapshot yet; ask the agent ("which env keys does ' + resource.name + ' have?").') : null
+    isOpen && resource.kind === 'application' ? el('div', { style: { paddingLeft: 16 } }, el(HistoryRows, { resource })) : null,
+    isOpen && showEnvKeys ? el(Small, { style: { paddingLeft: 16 } }, 'Env key names: ask the agent ("which env keys does ' + resource.name + ' have?").') : null
+  )
+}
+
+// Apps of one repository in two environments (staging and production, say): a pipeline pair line.
+function pairsOf(apps) {
+  const byRepo = new Map()
+  for (const r of apps) {
+    if (r.kind !== 'application' || !r.git_repository) continue
+    const key = String(r.git_repository).toLowerCase()
+    byRepo.set(key, (byRepo.get(key) || []).concat([r]))
+  }
+  // A pair is one app per environment (a monorepo with two apps in one environment is not a
+  // pipeline), and both sides with a known deployed commit (no "?" on the page).
+  return Array.from(byRepo.values()).filter(list => {
+    const envs = list.map(r => r.environment)
+    return envs.length >= 2 && new Set(envs).size === envs.length
+  })
+}
+
+function PairLine({ apps, fleet, rights, caps }) {
+  const order = apps.slice().sort((a, b) => isProtected(caps, a.environment) - isProtected(caps, b.environment) || String(a.environment).localeCompare(String(b.environment)))
+  return el(
+    'div',
+    { 'data-cc-pair': order.map(r => r.uuid).join(','), style: { ...S.row(10), flexWrap: 'wrap', padding: '4px 0', ...S.hair } },
+    el('span', { style: { ...S.strong, minWidth: 160 } }, String(order[0].git_repository).replace(/^.*[/:]([^/]+\/[^/]+?)(\.git)?$/, '$1')),
+    ...order.map((r, i) => {
+      const row = fleet[r.uuid] || {}
+      const d = row.last_good || row.latest
+      return el(
+        'span',
+        { key: r.uuid, style: { ...S.row(6) } },
+        i ? el(Codicon, { name: 'arrow-right', size: '0.7rem', style: { color: T.tertiary } }) : null,
+        el(StatusDot, { tone: row.state === 'failing' ? 'bad' : row.state === 'deploying' ? 'warn' : resourceTone(r.status) }),
+        el(Small, {}, r.environment + ' ' + (d && d.commit && d.commit !== 'HEAD' ? shortSha(d.commit) : '?') + (d ? ' ' + ago(d.finished_at || d.created_at) : '')),
+        rights.allows('deploy', r) ? el(ActionButton, { kind: 'deploy', target: r.uuid, resource: r, rights, variant: 'ghost' }) : null
+      )
+    })
   )
 }
 
 function ResourcesWidget({ widget }) {
   const snap = useSnapshot()
+  const caps = useCapabilities()
   const rights = useRights()
+  const focus = useValue($focus)
   const props = widget.props || {}
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState(props.status || 'any')
   const [env, setEnv] = useState('')
-  useEffect(() => setStatus(props.status || 'any'), [props.status])
   if (snap.isLoading) return el(Loading, { rows: 5 })
   if (snap.error) return el(QueryError, { error: snap.error, what: 'Snapshot' })
-  const all = (snap.data.resources || []).filter(
+  const data = snap.data || {}
+  const fleet = data.fleet || {}
+  const all = (data.resources || []).filter(
     r =>
       matches(r.project, props.project) &&
       (!props.environment || String(r.environment || '').toLowerCase() === String(props.environment).toLowerCase()) &&
       (!props.kinds || !props.kinds.length || props.kinds.includes(r.kind)) &&
       matches(r.name, props.name_contains)
   )
-  const envs = Array.from(new Set(all.map(r => r.environment).filter(Boolean))).sort()
-  const shown = all
-    .filter(r => statusMatches(r.status, status) && (!env || r.environment === env) && (!query || matches(r.name + ' ' + r.project + ' ' + (r.fqdn || ''), query)))
-    .sort((a, b) => (resourceTone(a.status) === 'good') - (resourceTone(b.status) === 'good') || String(a.name).localeCompare(String(b.name)))
-  const counts = { bad: all.filter(r => resourceTone(r.status) !== 'good').length }
+  const items = new Map(all.map(r => [r.uuid, attentionFor(data, r.uuid)]))
+  const envs = Array.from(new Set(all.map(r => r.environment).filter(Boolean))).sort((a, b) => isProtected(caps, b) - isProtected(caps, a) || a.localeCompare(b))
+  const shown = all.filter(
+    r =>
+      statusMatches(r.status, props.status, items.get(r.uuid)) &&
+      (!focus || items.get(r.uuid).some(a => a.signal === focus)) &&
+      (!env || r.environment === env) &&
+      (!query || matches(r.name + ' ' + r.project + ' ' + (r.fqdn || ''), query))
+  )
+  const rank = r => (items.get(r.uuid).some(a => a.severity === 'bad') ? 0 : items.get(r.uuid).length ? 1 : 2)
+  const sorted = shown.slice().sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)))
+  const apps = sorted.filter(r => r.kind === 'application')
+  const others = sorted.filter(r => r.kind !== 'application')
+  const groups = (props.environment ? [props.environment] : envs).map(e => ({ env: e, list: apps.filter(r => r.environment === e) })).filter(g => g.list.length)
+  const known = r => Boolean(fleet[r.uuid] && fleet[r.uuid].last_good && fleet[r.uuid].last_good.commit && fleet[r.uuid].last_good.commit !== 'HEAD')
+  const pairs = props.pairs !== false && !props.environment && !focus ? pairsOf(all).filter(list => list.every(known)) : []
+  const row = r => el(AppRow, { key: r.uuid, resource: r, row: fleet[r.uuid], items: items.get(r.uuid), rowActions: props.row_actions, rights, locked: isProtected(caps, r.environment), showEnvKeys: props.show_env_keys })
   return el(
     'div',
     { style: S.col(8) },
     el(
       'div',
       { style: { ...S.row(8), flexWrap: 'wrap' } },
-      el(Input, { 'aria-label': 'Filter resources', onChange: e => setQuery(e.target.value), placeholder: 'Filter by name, project or domain', style: { width: 220 }, value: query }),
-      el(SegmentedControl, { onChange: setStatus, options: STATUS_FILTERS, sizing: 'content', value: status }),
+      el(Input, { 'aria-label': 'Filter apps', onChange: e => setQuery(e.target.value), placeholder: 'Filter by name or project', style: { width: 200 }, value: query }),
       !props.environment && envs.length > 1
-        ? el(SegmentedControl, { onChange: id => setEnv(id === '*' ? '' : id), options: [{ id: '*', label: 'All envs' }].concat(envs.map(e => ({ id: e, label: e }))), sizing: 'content', value: env || '*' })
+        ? el(SegmentedControl, { onChange: id => setEnv(id === '*' ? '' : id), options: [{ id: '*', label: 'All' }].concat(envs.map(e => ({ id: e, label: e }))), sizing: 'content', value: env || '*' })
         : null,
+      focus ? el(Button, { onClick: () => $focus.set(null), size: 'xs', variant: 'ghost' }, el(Codicon, { name: 'close', size: '0.7rem' }), 'only ' + focus.replace('_', ' ')) : null,
       el('span', { style: { flex: 1 } }),
-      el(Small, {}, shown.length + ' of ' + all.length + (counts.bad ? ', ' + counts.bad + ' not running cleanly' : ''))
+      el(Small, {}, shown.length + ' of ' + all.length)
     ),
-    (props.row_actions || []).length && !rights.canAct && rights.loaded ? el(Small, {}, 'No action buttons: ' + (rights.reason || 'the action token cannot deploy') + '.') : null,
+    (props.row_actions || []).length && !rights.canAct && rights.loaded ? el(Small, {}, 'No action buttons: ' + (rights.reason || 'needs `deploy`') + '.') : null,
+    pairs.length && !query && !env
+      ? el('div', { style: S.col(0) }, el('span', { style: { ...S.label, padding: '4px 0' } }, 'Pipelines'), ...pairs.map(list => el(PairLine, { key: list.map(r => r.uuid).join(), apps: list, caps, fleet, rights })))
+      : null,
     shown.length
-      ? el('div', { style: { ...S.col(0), maxHeight: widget.size === 'l' ? 520 : 360, overflowY: 'auto' } }, ...shown.map(r => el(ResourceRow, { key: r.uuid, resource: r, rowActions: props.row_actions, rights, showEnvKeys: props.show_env_keys })))
-      : el(EmptyState, { title: 'No resources match', description: all.length ? 'Clear the filters to see all ' + all.length + '.' : 'This widget filters on ' + [props.project, props.environment].filter(Boolean).join(' / ') + '.' })
+      ? el(
+          'div',
+          { style: { ...S.col(0), maxHeight: widget.size === 'l' ? 640 : 380, overflowY: 'auto' } },
+          ...groups.flatMap(g => [
+            el('div', { key: 'g-' + g.env, style: { ...S.label, padding: '8px 0 2px' } }, g.env + (isProtected(caps, g.env) ? ' · protected' : '') + ' · ' + g.list.length),
+            ...g.list.map(row)
+          ]),
+          others.length ? el('div', { key: 'g-other', style: { ...S.label, padding: '8px 0 2px' } }, 'Services and databases · ' + others.length) : null,
+          ...others.map(row)
+        )
+      : el(EmptyState, { title: 'Nothing matches', description: all.length ? 'Clear the filters to see all ' + all.length + '.' : 'This widget filters on ' + [props.project, props.environment].filter(Boolean).join(' / ') + '.' })
   )
 }
 
-// ── deployments ──────────────────────────────────────────────────────────────────────────────────
+// ── servers (A15: his 0.0.11 cards, with range, deploy ticks, hover, peak, disk estimate) ────────
 
-function joinResources(deployments, resources) {
-  const byUuid = new Map((resources || []).map(r => [r.uuid, r]))
-  return (deployments || []).map(d => ({ ...d, resource: byUuid.get(d.resource_uuid) || null }))
+const RANGES = [
+  { id: '1h', label: '1 h', minutes: 60 },
+  { id: '6h', label: '6 h', minutes: 360 },
+  { id: '24h', label: '24 h', minutes: 1440 },
+  { id: '7d', label: '7 d', minutes: 10080 }
+]
+const $range = atom(null) // the range the page's switch picked; null: the widget's prop
+
+function useServerRange(rangeId) {
+  const profile = useProfile()
+  const ready = setupState(useSetup()) === 'ready'
+  return useQuery({
+    enabled: ready,
+    queryKey: qk(profile, 'server-metrics', rangeId),
+    queryFn: () => rest('/servers/metrics?range=' + rangeId),
+    refetchInterval: rangeId === '1h' ? 60000 : 300000,
+    staleTime: rangeId === '1h' ? 30000 : 240000,
+    retry: retryOnce
+  })
 }
 
-function deploymentFilter(props) {
-  return d =>
-    (!props.project || (d.resource && matches(d.resource.project, props.project))) &&
-    (!props.environment || (d.resource && String(d.resource.environment || '').toLowerCase() === String(props.environment).toLowerCase()))
+const METRICS = {
+  cpu: { label: 'CPU', series: ['cpu_percent'], domain: () => [0, 100], fmt: v => pct(v), peak: true },
+  ram: { label: 'RAM', series: ['memory_used_bytes'], domain: c => (c.memory_total_bytes ? [0, c.memory_total_bytes] : null), fmt: (v, _, c) => bytes(v) + ' of ' + bytes(c.memory_total_bytes) },
+  disk: { label: 'Disk', series: ['disk_used_percent'], domain: () => [0, 100], fmt: (v, _, c) => pct(v) + ' of ' + bytes(c.disk_total_bytes), limit: true },
+  load: { label: 'Load', series: ['load1'], domain: () => null, fmt: v => (typeof v === 'number' ? v.toFixed(2) : '?'), peak: true },
+  network: { label: 'Network in / out', series: ['network_rx_bytes_per_sec', 'network_tx_bytes_per_sec'], domain: () => null, fmt: (v, w) => rate(v) + ' / ' + rate(w) }
 }
 
-function DeploymentRow({ d, rights, running }) {
-  const r = d.resource
-  const canCancel = running && rights.canAct && r && rights.inScope(r) && rights.specs.has('cancel')
+function pointsOf(list) {
+  return (list || []).filter(p => Array.isArray(p) && typeof p[1] === 'number' && Number.isFinite(p[1]))
+}
+
+function Chart({ spec, series, current, minutes, ticks, cursor, onCursor, limit }) {
+  const lines = spec.series.map(name => pointsOf(series[name]))
+  const first = lines[0]
+  if (first.length < 2) return el(Small, {}, 'no history')
+  const w = 300
+  const h = 40
+  const end = first[first.length - 1][0]
+  const start = end - minutes * 60000
+  const values = lines.flat().map(p => p[1])
+  let [min, max] = spec.domain(current) || [0, Math.max(...values) * 1.15 || 1]
+  if (max - min <= 0) max = min + 1
+  const x = t => ((t - start) / (end - start)) * w
+  const y = v => h - 2 - ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * (h - 5)
+  const hot = limit != null && first[first.length - 1][1] >= limit
+  const color = hot ? T.yellow : T.accent
+  const poly = pts => pts.map(p => x(p[0]).toFixed(1) + ',' + y(p[1]).toFixed(1)).join(' ')
+  return el(
+    'svg',
+    {
+      'aria-label': spec.label + ', last ' + RANGES.find(r => r.minutes === minutes).label,
+      onMouseLeave: () => onCursor(null),
+      onMouseMove: e => {
+        const box = e.currentTarget.getBoundingClientRect()
+        onCursor(start + Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)) * (end - start))
+      },
+      preserveAspectRatio: 'none',
+      role: 'img',
+      style: { width: '100%', height: h, display: 'block', cursor: 'crosshair' },
+      viewBox: '0 0 ' + w + ' ' + h
+    },
+    limit != null ? el('line', { x1: 0, x2: w, y1: y(limit), y2: y(limit), style: { stroke: T.yellow, strokeDasharray: '2 4', opacity: 0.7, vectorEffect: 'non-scaling-stroke' } }) : null,
+    el('polygon', { points: '0,' + h + ' ' + poly(first) + ' ' + w + ',' + h, style: { fill: tint(color, 14), stroke: 'none' } }),
+    ...lines.map((pts, k) =>
+      pts.length > 1 ? el('polyline', { key: k, points: poly(pts), style: { fill: 'none', stroke: color, strokeWidth: 1.5, vectorEffect: 'non-scaling-stroke', strokeDasharray: k ? '3 3' : undefined, opacity: k ? 0.8 : 1 } }) : null
+    ),
+    ...ticks.filter(t => t.at >= start && t.at <= end).map(t =>
+      el('line', { key: t.uuid, x1: x(t.at), x2: x(t.at), y1: 0, y2: 9, style: { stroke: T.primary, strokeWidth: 2, opacity: 0.75, vectorEffect: 'non-scaling-stroke' } }, el('title', {}, 'Deploy: ' + t.name + ', ' + ago(new Date(t.at).toISOString())))
+    ),
+    cursor != null ? el('line', { x1: x(cursor), x2: x(cursor), y1: 0, y2: h, style: { stroke: T.primary, opacity: 0.6, vectorEffect: 'non-scaling-stroke' } }) : null
+  )
+}
+
+function valueAt(list, at) {
+  const pts = pointsOf(list)
+  if (!pts.length) return null
+  if (at == null) return pts[pts.length - 1][1]
+  let best = pts[0]
+  for (const p of pts) if (Math.abs(p[0] - at) < Math.abs(best[0] - at)) best = p
+  return best[1]
+}
+
+function ServerCard({ server, metrics, history, range, ranged, ticks, diskWarn }) {
+  const [cursor, setCursor] = useState(null)
+  const m = server.metrics
+  const current = (m && m.current) || {}
+  const extra = ranged && ranged.servers ? ranged.servers[server.uuid] : null
+  const series = (range === '1h' ? m && m.series : extra && extra.series) || (m && m.series) || {}
+  const minutes = RANGES.find(r => r.id === range).minutes
+  const tone = !server.reachable ? 'bad' : !server.usable ? 'warn' : current.disk_used_percent >= diskWarn ? 'warn' : 'good'
+  const full = extra && extra.disk_full
+  const inRange = ticks.filter(t => t.at >= Date.now() - minutes * 60000).length
   return el(
     'div',
-    { style: { ...S.row(8), padding: '6px 0', ...S.hair } },
-    el(StatusDot, { tone: deploymentTone(d.status) }),
+    { 'data-cc-server': server.uuid, style: { ...S.col(8), ...S.box } },
     el(
       'div',
-      { style: { ...S.col(0), flex: 1 } },
-      el('div', { style: S.row(6) }, el('span', { style: { ...S.strong, ...S.ellipsis } }, d.resource_name || d.resource_uuid || 'unknown'), el(Badge, { size: 'xs', variant: d.status === 'failed' ? 'destructive' : running ? 'warn' : 'muted' }, String(d.status || '').replace('_', ' '))),
-      el(
-        Small,
-        { style: S.ellipsis },
-        [r ? r.environment : null, d.server_name, shortSha(d.commit), ago(d.created_at), d.finished_at ? duration(d.created_at, d.finished_at) : null].filter(Boolean).join(' · ') +
-          (d.commit_message ? ' · ' + firstLine(d.commit_message) : '')
-      )
+      { style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(StatusDot, { tone }),
+      el('span', { style: S.strong }, server.name),
+      el(Small, {}, server.reachable ? (server.usable ? 'reachable' : 'reachable, not usable') : 'unreachable'),
+      full ? el(Badge, { variant: 'warn', title: 'From the last 7 days of disk use; an estimate' }, 'disk full in about ' + Math.max(1, Math.round(full.days)) + ' d') : null,
+      el(Small, {}, cursor != null ? ago(new Date(cursor).toISOString()) : inRange ? inRange + (inRange === 1 ? ' deploy' : ' deploys') + ' in this range' : ''),
+      el('span', { style: { flex: 1 } }),
+      el(AskButton, { kind: 'server', item: server })
     ),
-    d.url ? el(ExternalLink, { href: d.url }, el(Small, { style: { color: T.accent } }, 'Coolify')) : null,
-    canCancel ? el(ActionButton, { kind: 'cancel', target: d.uuid, resource: r, deployment: d.uuid, rights, label: 'Cancel', variant: 'outline' }) : null,
-    d.status === 'failed'
-      ? el(Button, { onClick: () => $diagnose.set({ ...d, at: Date.now() }), size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'debug', size: '0.75rem' }), 'Diagnose')
-      : null,
-    el(AskButton, { kind: 'deployment', item: d })
+    m
+      ? el(
+          'div',
+          { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 } },
+          ...metrics.map(id => {
+            const spec = METRICS[id]
+            const now = spec.series.map(name => (cursor == null ? current[name] : valueAt(series[name], cursor)))
+            const peak = spec.peak ? Math.max(...pointsOf(series[spec.series[0]]).map(p => p[1])) : null
+            const text = now[0] == null ? '?' : spec.fmt(now[0], now[1], current)
+            return el(
+              'div',
+              { key: id, style: S.col(2) },
+              el('span', { style: S.label }, spec.label),
+              el(
+                'span',
+                { style: { ...S.text, ...S.mono, color: T.primary, ...S.ellipsis }, title: text },
+                text,
+                peak != null && Number.isFinite(peak) && cursor == null ? el('span', { style: { color: T.tertiary } }, '  peak ' + spec.fmt(peak, null, current)) : null
+              ),
+              history ? el(Chart, { spec, series, current, minutes, ticks, cursor, onCursor: setCursor, limit: spec.limit ? diskWarn : null }) : null
+            )
+          })
+        )
+      : el(
+          Small,
+          {},
+          server.metrics_enabled === false
+            ? 'No metrics: Sentinel is off for this server (Coolify: Servers, ' + server.name + ', Sentinel).'
+            : 'No metrics in this snapshot' + (server.metrics_error ? ': ' + server.metrics_error : '.')
+        )
   )
 }
 
-function DeploymentsWidget({ widget }) {
+function ServersWidget({ widget }) {
+  const profile = useProfile()
   const snap = useSnapshot()
-  const rights = useRights()
+  const caps = useCapabilities()
+  const picked = useValue($range)
   const props = widget.props || {}
+  const range = picked || props.range || '1h'
+  const ranged = useServerRange(range)
   if (snap.isLoading) return el(Loading, { rows: 4 })
   if (snap.error) return el(QueryError, { error: snap.error, what: 'Snapshot' })
-  const dep = snap.data.deployments || {}
-  const keep = deploymentFilter(props)
-  const limit = props.limit || 10
-  const running = joinResources(dep.running, snap.data.resources).filter(keep)
-  const failed = joinResources(dep.recent_failed, snap.data.resources).filter(keep).slice(0, limit)
-  const show = props.show || 'all'
+  const wanted = (props.servers || []).map(s => s.toLowerCase())
+  const servers = (snap.data.servers || []).filter(s => !wanted.length || wanted.includes(String(s.name).toLowerCase()))
+  const metrics = props.metrics && props.metrics.length ? props.metrics : ['cpu', 'ram', 'disk', 'load', 'network']
+  const missing = ((caps.data && caps.data.not_available) || []).find(row => /^servers?(_stats)?:/.test(row.feature || ''))
+  const diskWarn = (snap.data.thresholds && snap.data.thresholds.disk_warn_percent) || 85
+  if (!servers.length) {
+    return el(
+      'div',
+      { style: S.col(6) },
+      el(Small, {}, missing ? 'Needs a team-wide token.' : 'The reading token returned no servers.'),
+      missing ? el(Button, { onClick: () => host.navigate(settingsHref(profile)), size: 'xs', variant: 'outline' }, 'Add a read-only token') : null
+    )
+  }
+  const deploys = (snap.data.latest_deployments || []).concat(((snap.data.deployments || {}).running) || [])
+  const ticksFor = server =>
+    deploys.filter(d => d.server_name === server.name && d.created_at).map(d => ({ uuid: d.uuid, name: d.resource_name || 'deploy', at: Date.parse(d.created_at) }))
   return el(
     'div',
-    { style: S.col(10) },
-    show !== 'failed'
-      ? el(
-          'div',
-          { style: S.col(0) },
-          el('div', { style: S.row(6, { paddingBottom: 4 }) }, el('span', { style: S.label }, 'Running now'), running.length ? el(Badge, { variant: 'warn' }, String(running.length)) : null),
-          running.length ? el('div', { style: S.col(0) }, ...running.slice(0, limit).map(d => el(DeploymentRow, { key: d.uuid, d, rights, running: true }))) : el(Small, {}, 'Nothing is deploying.')
-        )
-      : null,
-    show !== 'running'
-      ? el(
-          'div',
-          { style: S.col(0) },
-          el('div', { style: S.row(6, { paddingBottom: 4 }) }, el('span', { style: S.label }, 'Recent failures'), failed.length ? el(Badge, { variant: 'destructive' }, String(failed.length)) : null),
-          failed.length ? el('div', { style: S.col(0) }, ...failed.map(d => el(DeploymentRow, { key: d.uuid, d, rights, running: false }))) : el(Small, {}, 'No failed deployments in the recent history.')
-        )
-      : null
+    { style: S.col(8) },
+    el(
+      'div',
+      { style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(Small, {}, 'Hover a chart to read a moment; ticks are deploys.'),
+      el('span', { style: { flex: 1 } }),
+      ranged.isFetching && range !== '1h' ? el(Codicon, { name: 'refresh', size: '0.75rem', spinning: true }) : null,
+      el(SegmentedControl, { onChange: id => $range.set(id), options: RANGES.map(r => ({ id: r.id, label: r.label })), sizing: 'content', value: range })
+    ),
+    ...servers.map(server =>
+      el(ServerCard, { key: server.uuid, server, metrics, history: props.history !== false, range, ranged: ranged.data, ticks: ticksFor(server), diskWarn })
+    )
   )
 }
 
@@ -1305,7 +1681,7 @@ function QuickActionsWidget({ widget }) {
   const rights = useRights()
   const buttons = (widget.props && widget.props.buttons) || []
   if (!buttons.length) return el(EmptyState, { title: 'No pinned actions', description: 'Edit the layout to pin one, or ask the agent: "add a restart button for my staging app".' })
-  if (rights.loaded && !rights.canAct) return el(Note, { tone: 'warn', icon: 'lock' }, rights.reason || 'The action token cannot run actions.')
+  if (rights.loaded && !rights.canAct) return el(Note, { tone: 'warn', icon: 'lock' }, rights.reason || 'Needs `deploy`.')
   const resources = (snap.data && snap.data.resources) || []
   return el(
     'div',
@@ -1322,7 +1698,7 @@ function QuickActionsWidget({ widget }) {
         el('div', { style: { ...S.col(0), flex: 1 } }, el('span', { style: { ...S.strong, ...S.ellipsis } }, label), el(Small, { style: S.ellipsis }, r ? r.project + ' / ' + r.environment + ' · ' + r.status : snap.isLoading ? 'loading' : 'not in the snapshot: ' + button.target)),
         allowed || (!r && !snap.isLoading)
           ? el(ActionButton, { kind: button.kind, target: r ? r.uuid : button.target, resource: r || { name: button.target }, params: button.params, rights, label: spec ? spec.label : button.kind, variant: 'default' })
-          : el(Small, {}, rights.loaded ? 'outside the action token' : '')
+          : el(Small, {}, rights.loaded ? 'outside the API token' : '')
       )
     })
   )
@@ -1379,7 +1755,7 @@ function DiagnosisCard({ card, deployment }) {
           variant: 'secondary'
         },
         el(Codicon, { name: 'comment-discussion', size: '0.75rem' }),
-        'Ask Hermes'
+        'Ask Hermes to fix'
       )
     )
   )
@@ -1436,53 +1812,6 @@ function DiagnosisPanel({ deployment, pasteBox }) {
           )
         )
       : null
-  )
-}
-
-function DiagnosisWidget({ widget }) {
-  const snap = useSnapshot()
-  const selected = useValue($diagnose)
-  const props = widget.props || {}
-  const failed = joinResources((snap.data && snap.data.deployments && snap.data.deployments.recent_failed) || [], snap.data && snap.data.resources).filter(deploymentFilter(props))
-  const current = selected && (failed.some(d => d.uuid === selected.uuid) || !props.environment) ? selected : null
-  return el(
-    'div',
-    { style: S.col(8) },
-    failed.length
-      ? el(
-          'div',
-          { style: { ...S.row(6), flexWrap: 'wrap' } },
-          el(Small, {}, 'Failed:'),
-          ...failed.slice(0, 6).map(d =>
-            el(Button, { key: d.uuid, onClick: () => $diagnose.set({ ...d, at: Date.now() }), size: 'xs', variant: current && current.uuid === d.uuid ? 'default' : 'chip' }, d.resource_name + ' ' + ago(d.created_at))
-          )
-        )
-      : snap.isLoading
-        ? null
-        : el(Small, {}, 'No failed deployments to diagnose in the recent history.'),
-    el(DiagnosisPanel, { deployment: current, pasteBox: props.paste_box })
-  )
-}
-
-// ── update notice ────────────────────────────────────────────────────────────────────────────────
-
-function UpdateNoticeWidget() {
-  const caps = useCapabilities()
-  if (caps.isLoading) return el(Loading, { rows: 2 })
-  if (caps.error) return el(QueryError, { error: caps.error, what: 'Capabilities' })
-  const inst = caps.data.instance || {}
-  const update = Boolean(inst.update_available)
-  return el(
-    'div',
-    { style: S.col(6) },
-    el(
-      'div',
-      { style: S.row(8) },
-      el(Codicon, { name: update ? 'arrow-circle-up' : 'pass', size: '1rem', style: { color: update ? T.yellow : T.green } }),
-      el('span', { style: S.strong }, update ? 'Coolify ' + inst.latest_version + ' is available' : 'Coolify ' + (inst.coolify_version || '?') + ' is the latest release')
-    ),
-    el(Small, {}, caps.data.update_notice || (inst.update_check === 'off' ? 'The update check is off in the plugin settings.' : '')),
-    update ? el(ExternalLink, { href: (inst.url || '').replace(/\/$/, '') + '/settings' }, el(Small, { style: { color: T.accent } }, 'Open your instance to upgrade')) : el(ExternalLink, { href: inst.url }, el(Small, { style: { color: T.accent } }, 'Open ' + hostOf(inst.url)))
   )
 }
 
@@ -1556,15 +1885,6 @@ function NotebookWidget({ widget }) {
   )
 }
 
-// ── backups (registry type without a backend route yet) ──────────────────────────────────────────
-
-function BackupsWidget() {
-  return el(EmptyState, {
-    title: 'Backups are not wired yet',
-    description: 'This widget type is in the registry, but the backend has no backup route in this version. Ask the agent about backups meanwhile.'
-  })
-}
-
 // ── cockpit chat ─────────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_SUGGESTIONS = ['Why did the last staging deploy fail?', 'Is any server overloaded?', 'What changed on this instance this week?']
@@ -1634,28 +1954,22 @@ function ChatWidget({ widget }) {
 // ── widget registry (JS side of layout.py's WidgetType rows) ────────────────────────────────────
 
 const RENDERERS = {
-  connection: ConnectionWidget,
-  servers: ServersWidget,
-  resources: ResourcesWidget,
+  summary: SummaryWidget,
   deployments: DeploymentsWidget,
+  resources: ResourcesWidget,
+  servers: ServersWidget,
   quick_actions: QuickActionsWidget,
-  diagnosis: DiagnosisWidget,
-  update_notice: UpdateNoticeWidget,
   notebook: NotebookWidget,
-  backups: BackupsWidget,
   chat: ChatWidget
 }
 
 const ICONS = {
-  connection: 'key',
-  servers: 'server',
-  resources: 'package',
+  summary: 'pulse',
   deployments: 'rocket',
+  resources: 'package',
+  servers: 'server',
   quick_actions: 'zap',
-  diagnosis: 'debug',
-  update_notice: 'arrow-circle-up',
   notebook: 'notebook',
-  backups: 'archive',
   chat: 'comment-discussion'
 }
 
@@ -1897,7 +2211,8 @@ function EditToolbar({ catalog, draft, setDraft, dirty, saving, onSave, onCancel
       { style: { ...S.row(4), flexWrap: 'wrap' } },
       el(Small, { style: { width: 64 } }, 'Presets'),
       ...presets.map(p => el(Button, { key: p.name, onClick: () => onPreset(p), size: 'xs', title: p.description, variant: 'outline' }, p.label))
-    )
+    ),
+    el(Small, { style: { color: T.quaternary } }, 'The agent edits the same layout: try "add a notebook widget to my cockpit".')
   )
 }
 
@@ -2037,7 +2352,8 @@ function CockpitPage() {
   const availById = new Map(((avail.data && avail.data.availability) || []).map(row => [row.id, row]))
   const types = new Map(((layoutQ.data && layoutQ.data.widget_types) || []).map(t => [t.type, t]))
   const inst = (caps.data && caps.data.instance) || {}
-  const failedRecent = (((snap.data || {}).deployments || {}).recent_failed || []).length
+  const diagnosing = useValue($diagnose)
+  const shownDeploy = Boolean(diagnosing && ((snap.data && snap.data.latest_deployments) || []).slice(0, 8).some(d => d.uuid === diagnosing.uuid))
   const running = (((snap.data || {}).deployments || {}).running || []).length
   const tracked = useValue($tracked)
   const fast = running > 0 || tracked.some(t => !t.done)
@@ -2065,14 +2381,27 @@ function CockpitPage() {
         el('h1', { style: { margin: 0, fontSize: '0.9375rem', fontWeight: 600, color: T.primary } }, 'Coolify Cockpit'),
         inst.url ? el(ExternalLink, { href: inst.url }, el(Small, { style: { color: T.accent } }, hostOf(inst.url))) : null,
         inst.coolify_version ? el(Small, {}, 'v' + inst.coolify_version) : null,
-        inst.update_available ? el(Badge, { variant: 'warn' }, 'update ' + inst.latest_version) : null,
-        running ? el(Badge, { variant: 'warn' }, running + ' deploying') : null,
-        failedRecent ? el(Badge, { variant: 'destructive' }, failedRecent + ' recent failures') : null,
+        // A14: the header carries no counts; the summary row is the only place a count shows.
+        caps.data && caps.data.setup && caps.data.setup.line
+          ? el(IconButton, { icon: caps.data.setup.tone === 'good' ? 'key' : 'warning', label: caps.data.setup.line + '. Open settings.', onClick: () => host.navigate(settingsHref(profile)) })
+          : null,
         el('span', { style: { flex: 1 } }),
-        snap.data ? el(Small, {}, 'Snapshot ' + ago(snap.data.taken_at) + (fast ? ', polling every 15 s' : ', polling every 60 s')) : null,
-        onboarding ? null : el(Button, { disabled: refreshing, onClick: refresh, size: 'xs', variant: 'ghost' }, el(Codicon, { name: 'refresh', size: '0.75rem', spinning: refreshing }), 'Refresh'),
+        onboarding
+          ? null
+          : el(
+              Button,
+              {
+                disabled: refreshing,
+                onClick: refresh,
+                size: 'xs',
+                title: snap.data ? 'Updated ' + ago(snap.data.taken_at) + '. Refreshes every ' + (fast ? '15' : '60') + ' s.' : undefined,
+                variant: 'ghost'
+              },
+              el(Codicon, { name: 'refresh', size: '0.75rem', spinning: refreshing }),
+              'Refresh'
+            ),
         onboarding ? null : el(AskButton, { kind: 'overview', item: {}, label: 'Ask' }),
-        editing || onboarding ? null : el(Button, { disabled: !saved, onClick: startEdit, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'edit', size: '0.75rem' }), 'Edit layout')
+        editing || onboarding ? null : el(Button, { disabled: !saved, onClick: startEdit, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'edit', size: '0.75rem' }), 'Edit')
       ),
       el(Banner, {}),
       coldStart ? el('div', { 'data-cc-notice': 'cold-start', role: 'status' }, el(Note, {}, COLD_START_TEXT)) : null,
@@ -2081,7 +2410,7 @@ function CockpitPage() {
       editing && draft
         ? el(EditToolbar, { catalog: layoutQ.data, dirty, draft, onCancel: stopEdit, onPreset: setPreset, onSave: save, saving, setDraft })
         : null,
-      onboarding ? null : el(StandaloneDiagnosis, { hasWidget: widgets.some(w => w.type === 'diagnosis') }),
+      onboarding ? null : el(StandaloneDiagnosis, { hasWidget: widgets.some(w => w.type === 'deployments') && shownDeploy }),
       onboarding || setupNow === null
         ? null
         : layoutQ.isLoading
@@ -2098,7 +2427,6 @@ function CockpitPage() {
                 )
               ),
       !onboarding && saved && saved.warnings && saved.warnings.length ? el(Note, { tone: 'warn' }, 'Some widgets in layout.json were skipped:\n' + saved.warnings.join('\n')) : null,
-      saved && !onboarding ? el(Small, { style: { color: T.quaternary } }, 'Layout version ' + saved.version + (saved.updated_by ? ', last changed by ' + saved.updated_by + ' ' + ago(saved.updated_at) : '') + '. The agent edits the same layout: try "add a notebook widget to my cockpit".') : null
     ),
     el(ActionConfirm, {}),
     preset
@@ -2158,12 +2486,15 @@ function SetupStep({ n, done, optional, title, status, children, action }) {
   )
 }
 
+// 0.1.0 (PLAN-v0.1, Tokens and setup): two steps, each one line and one button. The detail sits
+// behind "Why?". The optional read-only token never shows here: the result line offers it when the
+// saved token is limited to some projects.
 function SetupPanel({ state, data, onCheck, checking }) {
   const profile = useProfile()
+  const [why, setWhy] = useState(false)
   const steps = new Map(((data && data.steps) || []).map(step => [step.id, step]))
   const url = steps.get('url') || {}
-  const action = steps.get('action_token') || {}
-  const read = steps.get('read_token') || {}
+  const token = steps.get('action_token') || {}
   const base = url.set && url.value ? String(url.value).replace(/\/+$/, '') : ''
   const openSettings = label => el(Button, { onClick: () => host.navigate(settingsHref(profile)), size: 'xs', variant: 'default' }, el(Codicon, { name: 'settings-gear', size: '0.75rem' }), label)
   const tokenPage = base ? el(Button, { onClick: () => openExternal(base + '/security/api-tokens'), size: 'xs', variant: 'outline' }, el(Codicon, { name: 'link-external', size: '0.75rem' }), 'Open API tokens in Coolify') : null
@@ -2172,56 +2503,111 @@ function SetupPanel({ state, data, onCheck, checking }) {
   return el(
     'section',
     { 'data-cc-setup': state, style: { ...S.col(10), maxWidth: 760 } },
-    el(
-      'div',
-      { style: S.col(4) },
-      el('h2', { style: { margin: 0, fontSize: '0.875rem', fontWeight: 600, color: T.primary } }, 'Set up the cockpit'),
-      el('span', { style: S.text }, 'Connect Hermes to your Coolify: its address and an API token you create in Coolify. Hermes stores the token for this profile; the cockpit shows only a fingerprint of it, never the token.')
-    ),
+    el('h2', { style: { margin: 0, fontSize: '0.875rem', fontWeight: 600, color: T.primary } }, 'Set up the cockpit'),
     off
       ? el(SetupStep, {
-          n: ++n, title: 'Turn on the cockpit in this profile',
-          status: 'off in ' + (profile || 'this profile'),
-          action: el(Button, { onClick: () => host.navigate(PLUGINS_PAGE), size: 'xs', variant: 'default' }, el(Codicon, { name: 'extensions', size: '0.75rem' }), 'Open Capabilities, Plugins')
+          n: ++n, title: 'Turn on the plugin in this profile',
+          action: el(Button, { onClick: () => host.navigate(PLUGINS_PAGE), size: 'xs', variant: 'default' }, el(Codicon, { name: 'extensions', size: '0.75rem' }), 'Open Plugins')
         },
-        el('span', { style: S.text }, 'In Capabilities, Plugins, switch on coolify-cockpit (the Hermes plugin, not only the Desktop page). The steps below open once it runs.'))
+        el('span', { style: S.text }, 'Switch on coolify-cockpit in Capabilities, Plugins.'))
       : null,
     el(SetupStep, {
-        n: ++n, done: Boolean(url.set), title: 'Coolify address',
-        status: url.set ? url.value : url.error ? plain(url.error) : off ? null : 'not set',
-        action: off ? null : openSettings(url.set ? 'Change in settings' : 'Enter in settings')
+        n: ++n, done: Boolean(url.set), title: 'Coolify URL',
+        status: url.set ? url.value : url.error ? plain(url.error) : null,
+        action: off ? null : openSettings(url.set ? 'Change' : 'Enter URL')
       },
-      el('span', { style: S.text }, 'The address you open Coolify at, for example https://coolify.example.com. Field "Coolify URL".')),
+      el('span', { style: S.text }, 'The address you open Coolify at.')),
     el(SetupStep, {
-        n: ++n, done: Boolean(action.set), optional: !off && !action.required && !action.set, title: 'Action token',
-        status: action.set ? 'set' : off ? null : 'not set',
-        action: off ? null : [openSettings(action.set ? 'Change in settings' : 'Paste in settings'), tokenPage].filter(Boolean)
+        n: ++n, done: Boolean(token.set), title: 'API token',
+        status: token.set ? 'set' : null,
+        action: off ? null : [tokenPage, openSettings(token.set ? 'Change' : 'Paste token')].filter(Boolean)
       },
-      el(
-        'ol',
-        { style: { ...S.text, margin: 0, paddingLeft: 18 } },
-        el('li', {}, 'In Coolify, Settings, Advanced: set API access to Enabled (and MCP server, for server stats).'),
-        el('li', {}, 'Open Keys & Tokens, API tokens, and create a token.'),
-        el('li', {}, 'Give it read and deploy. Limit it to the environments the cockpit may act on, for example staging.'),
-        el('li', {}, 'Copy it and paste it into the field "Action token" in the settings.')
-      ),
-      el(Small, {}, 'Actions (deploy, restart, stop) use only this token, and each one asks you first. Without the deploy right, the cockpit is read-only.')),
-    el(SetupStep, {
-        n: ++n, done: Boolean(read.set), optional: true, title: 'Overview token',
-        status: read.set ? 'set' : off ? null : 'not set',
-        action: off ? null : openSettings(read.set ? 'Change in settings' : 'Paste in settings')
-      },
-      el('span', { style: S.text }, 'A second, read-only token for the whole team. It adds server stats (CPU, memory, disk) and the full resource list, which a token limited to environments cannot read. It is never used for actions.')),
+      el('div', { style: { ...S.row(6), flexWrap: 'wrap' } },
+        el('span', { style: S.text }, 'Create one with'),
+        el(Badge, { variant: 'outline' }, 'read'),
+        el(Badge, { variant: 'outline' }, 'deploy'),
+        el('span', { style: S.text }, 'on all projects.'),
+        el('button', { type: 'button', onClick: () => setWhy(!why), style: { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.tertiary, fontSize: '0.75rem', textDecoration: 'underline' } }, why ? 'Hide' : 'Why?')),
+      why ? el(Small, {}, 'Read shows your apps, deploys and servers. Deploy adds the Deploy and Restart buttons. Each agent action still asks you, and the agent stays off protected environments. The token is stored in this profile; the cockpit shows only its fingerprint. If API access is off: Coolify, Settings, Advanced.') : null),
     el(
       'div',
       { style: { ...S.row(10), flexWrap: 'wrap' } },
-      el(Button, { disabled: checking, onClick: onCheck, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'refresh', size: '0.75rem', spinning: checking }), 'Check again'),
-      el(Small, {}, 'Saved values show here within a few seconds, no restart needed.')
+      el(Button, { disabled: checking, onClick: onCheck, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'refresh', size: '0.75rem', spinning: checking }), 'Check again')
     )
   )
 }
 
 // ── status-bar chip ──────────────────────────────────────────────────────────────────────────────
+
+// Settings, Plugins, Coolify Cockpit: the connection, the token's rights and scope, and what the
+// setup unlocks. The settings form itself sits under this entry (Desktop folds it in).
+function SettingsPage() {
+  return el(
+    'div',
+    { style: S.col(12) },
+    el(Card, { title: 'Connection and token' }, el(ConnectionWidget, { widget: { props: { show_warnings: true, show_projects: false } } })),
+    el(AlertsCard, {}),
+    el(TwoPlaceNote, {})
+  )
+}
+
+// Desktop loads this file from the computer it runs on, never from a remote Hermes, so an update on the
+// server leaves this half behind. host.state.connectionId is 'local' for this computer's own Hermes
+// (Desktop's LOCAL_CONNECTION_ID, never given to a remote source); any other value, null or a Desktop
+// without the field shows the line, because a missed update costs more than one line.
+const NO_CONNECTION = atom(null)
+const TWO_PLACE_TIP = 'No Hermes on this computer: Capabilities → Plugins → Install from Git with this plugin\'s repository, Force reinstall.'
+
+function TwoPlaceNote() {
+  const id = useValue((host.state && host.state.connectionId) || NO_CONNECTION)
+  if (id === 'local') return null
+  return el('div', { 'data-cc-two-place': '', title: TWO_PLACE_TIP, style: S.row(6, S.small) },
+    el(Codicon, { name: 'info', size: '0.75rem' }),
+    el('span', null, 'Hermes on another computer? Update this plugin on both. Here: ',
+      el('code', null, 'hermes plugins update ' + ID), ', then Rescan.'))
+}
+
+// 0.1.0 M6: alerts run as a Hermes cron job without a model turn (GET /alerts reads it back). The
+// page cannot create a job; the button drafts the request to Hermes, which creates it in that chat.
+function useAlerts() {
+  const profile = useProfile()
+  return useQuery({ queryKey: qk(profile, 'alerts'), queryFn: () => rest('/alerts'), refetchInterval: 60000, staleTime: 20000, retry: retryOnce })
+}
+
+function alertsLine(a) {
+  if (!a || !a.on) return 'Off. Hermes can check every few minutes and tell you what is new.'
+  const age = typeof a.last_check_age_s === 'number' ? 'checked ' + (a.last_check_age_s < 90 ? 'just now' : Math.round(a.last_check_age_s / 60) + ' min ago') : 'not run yet'
+  return 'On, ' + (a.schedule || '?') + ', to ' + (a.deliver || 'local') + ' · ' + age + ' · ' + (a.open || 0) + ' open'
+}
+
+const ALERTS_ON_PROMPT = 'Turn on Coolify Cockpit alerts: run `hermes coolify-cockpit alerts on`, or create the no-agent cron job the coolify-cockpit skill describes so the alerts land in this chat.'
+const ALERTS_OFF_PROMPT = 'Turn off Coolify Cockpit alerts (`hermes coolify-cockpit alerts off`).'
+
+function AlertsCard() {
+  const q = useAlerts()
+  const a = q.data
+  const [busy, setBusy] = useState(false)
+  const draft = async text => {
+    setBusy(true)
+    try {
+      await openCockpitChat(text)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return el(
+    Card,
+    { title: 'Alerts' },
+    el(
+      'div',
+      { 'data-cc-alerts': a && a.on ? 'on' : 'off', style: { ...S.row(10), flexWrap: 'wrap' } },
+      el(StatusDot, { tone: a && a.on ? 'good' : 'muted' }),
+      el('span', { style: { ...S.text, flex: 1 } }, q.error ? 'Could not read the alert job.' : alertsLine(a)),
+      el(Button, { disabled: busy || !a, onClick: () => draft(a && a.on ? ALERTS_OFF_PROMPT : ALERTS_ON_PROMPT), size: 'xs', variant: a && a.on ? 'outline' : 'default' },
+        el(Codicon, { name: 'comment-discussion', size: '0.75rem' }), a && a.on ? 'Ask Hermes to turn off' : 'Ask Hermes to turn on')
+    )
+  )
+}
 
 function CockpitChip() {
   const setup = useSetup()
@@ -2247,14 +2633,13 @@ function CockpitChip() {
   }
   const data = snap.data || {}
   const servers = data.servers || []
-  const dayAgo = Date.now() - 24 * 3600 * 1000
-  const failed = ((data.deployments || {}).recent_failed || []).filter(d => Date.parse(d.created_at || '') >= dayAgo).length
+  const failed = signalCount(data, 'failing')
   const running = ((data.deployments || {}).running || []).length
   const update = Boolean(caps.data && caps.data.instance && caps.data.instance.update_available)
   const tone = snap.error ? 'bad' : !snap.data ? 'muted' : servers.some(s => !s.reachable) ? 'bad' : failed ? 'warn' : 'good'
   const title = snap.error
     ? 'Coolify Cockpit: ' + snap.error.message
-    : 'Coolify: ' + servers.filter(s => s.reachable).length + '/' + servers.length + ' servers reachable, ' + running + ' deploying, ' + failed + ' failed in the last 24 h' + (update ? ', update available' : '') + '. Open the cockpit.'
+    : 'Coolify: ' + servers.filter(s => s.reachable).length + '/' + servers.length + ' servers reachable, ' + running + ' deploying, ' + failed + ' failing' + (update ? ', update available' : '') + '. Open the cockpit.'
   return el(
     'button',
     {
@@ -2268,7 +2653,7 @@ function CockpitChip() {
     el(StatusDot, { tone }),
     el('span', {}, 'Coolify'),
     running ? el('span', { style: { color: T.yellow } }, running + ' deploying') : null,
-    failed ? el('span', { style: { color: T.red } }, failed + ' failed') : null,
+    failed ? el('span', { style: { color: T.red } }, failed + ' failing') : null,
     update ? el(Codicon, { name: 'arrow-circle-up', size: '0.7rem', style: { color: T.yellow }, title: 'Coolify update available' }) : null
   )
 }
@@ -2276,13 +2661,18 @@ function CockpitChip() {
 export default {
   id: ID,
   name: 'Coolify Cockpit',
-  description: 'Operate your Coolify instance from Hermes: servers, resources, deployments, actions, diagnosis, notebook and a cockpit chat.',
+  description: 'What needs you on your Coolify instance: failing apps, latest deploys, servers. Deploy and restart behind a confirm.',
   defaultEnabled: false,
   register(ctx) {
     pluginCtx = ctx
     ctx.register({ id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => jsx(CockpitPage, {}) })
     ctx.register({ id: 'nav', area: SIDEBAR_NAV_AREA, order: 55, data: { codicon: 'dashboard', label: NAV_LABEL, path: PATH } })
     ctx.register({ id: 'chip', area: STATUSBAR_AREAS.right, order: 70, render: () => jsx(CockpitChip, {}) })
+    // Settings, Plugins: the same name and icon as the sidebar row. Desktop folds the plugin's
+    // settings form (plugin.yaml config_schema) under this entry as its "Agent settings" page.
+    if (typeof ctx.registerSettingsPage === 'function') {
+      ctx.registerSettingsPage({ id: 'settings', title: NAV_LABEL, icon: 'dashboard', order: 55, render: () => jsx(SettingsPage, {}) })
+    }
     ctx.register({
       id: 'open',
       area: PALETTE_AREA,

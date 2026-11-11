@@ -3,7 +3,7 @@
   "label": "Coolify Cockpit",
   "description": "Backend routes for the Coolify Cockpit pane: capabilities, snapshot, deployment history",
   "icon": "Gauge",
-  "version": "0.0.11",
+  "version": "0.1.0",
   "tab": {
     "path": "/coolify-cockpit",
     "hidden": true

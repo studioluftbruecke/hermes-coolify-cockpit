@@ -7,7 +7,7 @@ M2: the Snapshot (`snapshot.py`) and the read tools `coolify_overview` and `cool
 M6: `coolify_diagnose` classifies a failed deployment log (pasted, or fetched with a token holding
 read:sensitive) into a diagnosis card; log text is redacted and returned as fenced untrusted data.
 M4: `coolify_action` runs one lifecycle action (`actions.py`) behind the Hermes approval, and
-`POST /actions` serves the pane's own buttons. Both use only the action token.
+`POST /actions` serves the pane's own buttons. Both use only the API token.
 M7: the instance notebook `COOLIFY.md` (`notes.py`, tool `coolify_notes`), entries the cockpit writes
 itself when a capabilities check or a fresh snapshot sees a change (version, servers, token rights),
 and the one-line update notice in `coolify_capabilities` and `coolify_overview`.
@@ -148,6 +148,8 @@ def capabilities_report(get_setting: SettingGetter, get_secret: SecretGetter, *,
         out.pop("notebook", None)
         out.pop("notebook_error", None)
     out["cache"] = bundle["cache"]
+    out["protected"] = {"environments": protected_environments(get_setting),
+                        "agent_allowed": _as_bool(get_setting(PROTECTED_SWITCH, False), False)}
     return out
 
 
@@ -183,6 +185,7 @@ def register(ctx) -> None:
     _register_layout(ctx)  # M5
     _register_notes(ctx, get_setting)  # M7
     _register_agent_kit(ctx, get_setting)  # M8
+    _register_alerts(ctx, get_setting)  # 0.1.0 M6, M7
 
 
 # --- M2: snapshot, read tools and dashboard routes (snapshot.py) ------------------------------
@@ -191,15 +194,18 @@ def register(ctx) -> None:
 COOLIFY_OVERVIEW = {
     "name": "coolify_overview",
     "description": (
-        "One compact snapshot of the Coolify instance: servers with current load (CPU, RAM, disk, "
-        "load, network), every application, service and database with project, environment, status "
-        "and domain, deployments running now, and the most recent failed deployments with time, "
-        "commit and deployment id. Use it for 'what is going on', 'what failed', 'how loaded are the "
-        "servers', 'is X up'. Reads only; cached for 10 seconds. Optional filters narrow the resource "
+        "One compact snapshot of the Coolify instance. It opens with NEEDS YOU: the attention list, "
+        "worst first (apps failing now, unhealthy resources, servers down or under pressure, env "
+        "changed since the last deploy, branch ahead of the deployed commit, a Coolify update), each "
+        "with the fix it suggests. Then servers with current load, deployments running now, the "
+        "latest deploys of every environment (successes included, a failure a later deploy fixed is "
+        "marked), and every application, service and database with project, environment, status "
+        "and domain. Use it for 'what needs me', 'what is going on', 'what failed', 'how loaded are "
+        "the servers', 'is X up': answer from NEEDS YOU in one call. Reads only; cached for 10 seconds. Optional filters narrow the resource "
         "list by project or environment name (case-insensitive, part of the name is enough). For "
         "'why did the last (staging) deploy fail?' use three calls and stop: this tool with "
-        "environment=, then coolify_deployments with the newest failed deployment's id, then "
-        "coolify_diagnose with that id. The bundled skill is "
+        "environment=, then coolify_deployments with the failing app's newest failed deployment id "
+        "from LATEST DEPLOYS, then coolify_diagnose with that id. The bundled skill is "
         "skill_view('coolify-cockpit:coolify-cockpit')."
     ),
     "parameters": {
@@ -237,6 +243,10 @@ def _snap():
     return importlib.import_module(".snapshot", __package__ or __name__)
 
 
+def _client():
+    return importlib.import_module(".coolify_client", __package__ or __name__)
+
+
 def _default_cache_file():
     """`<profile>/plugin-data/coolify-cockpit/snapshot-cache.json`, or None outside Hermes."""
     try:
@@ -253,7 +263,8 @@ class _Setup:
     """What every M2 entry point needs: the connection, the transport, the cache."""
 
     def __init__(self, get_setting: SettingGetter, get_secret: SecretGetter, *, transport: Any = None,
-                 cache: Any = None, cache_file: Any = "default", data_dir: Any = "default"):
+                 cache: Any = None, cache_file: Any = "default", data_dir: Any = "default",
+                 git_transport: Any = None, forgebruecke: Optional[str] = None, read_budget: Optional[int] = None):
         caps_mod, snap_mod = _caps(), _snap()
         self.snap = snap_mod
         self.get_setting = get_setting
@@ -266,13 +277,23 @@ class _Setup:
         self.cache = cache if cache is not None else snap_mod.SNAPSHOT_CACHE
         self.cache_file = _default_cache_file() if cache_file == "default" else cache_file
         self.data_dir = _resolve_data_dir(data_dir)  # M7: notebook and observed state; None outside Hermes
+        self.get_secret = get_secret
+        # 0.1.0 M7: git hosts are asked over the real network only when no Coolify transport was
+        # injected (tests inject one and pass `git_transport` themselves when they want reads).
+        self.git_transport = git_transport if git_transport is not None else (
+            None if transport is not None else _client().urllib_transport)
+        self.forgebruecke_host = forgebruecke_host if forgebruecke is None else (lambda: forgebruecke)
+        # How many env and branch reads one served snapshot may spend. The page and the agent use the
+        # modules' small defaults; the tick runs every few minutes and reads every due app at once,
+        # so its first run already sees what the page sees after ten minutes.
+        self.read_budget = read_budget
 
     def snapshot(self, refresh: bool = False) -> dict:
         snap = self.snap.snapshot_dict(self.connection, cache=self.cache, cache_file=self.cache_file,
                                        refresh=refresh, **self.kwargs)
         if (snap.get("cache") or {}).get("hit") is None:  # M7: a fresh read may show a server change
             _observe_snapshot(self.connection.base_url, snap, self.data_dir)
-        return snap
+        return with_attention(self, snap)
 
     def stored_snapshot(self) -> Optional[dict]:
         """The newest stored snapshot of any age (memory or file), without a Coolify request."""
@@ -282,6 +303,127 @@ class _Setup:
     def reader(self, snapshot: dict):
         return self.snap.reader_client(self.connection, str((snapshot.get("source") or {}).get("role")),
                                        **self.kwargs)
+
+
+# --- 0.1.0 M2: the Attention list on every served snapshot (fleet.py, envcheck.py) ---------------
+#
+# The snapshot (cached 10 s, shared by processes) carries the per-app FleetRows. The Attention list
+# is built each time a snapshot is served, from it and three facts kept beside it: the env check
+# (`env-check.json`, its own slow reads), the version check (`version-check.json`, no request here)
+# and the branch heads (`branch-heads.json`, M7). The page's summary, the status-bar chip,
+# coolify_overview, @coolify:overview and the alert job all read this one list.
+
+def _fleet():
+    return importlib.import_module(".fleet", __package__ or __name__)
+
+
+def _envcheck():
+    return importlib.import_module(".envcheck", __package__ or __name__)
+
+
+def _number(value: Any, default: float, low: float, high: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if low <= number <= high else default
+
+
+def attention_view(setup: "_Setup", snap: dict, *, env_reads: bool = True):
+    """The fleet.View for a served snapshot: env answers (reading the due ones unless `env_reads`
+    is off), the stored version check, the stored branch heads, the two thresholds."""
+    fleet_mod = _fleet()
+    env_changes: dict = {}
+    data_dir = setup.data_dir
+    if data_dir is not None and snap.get("fleet"):
+        env = _envcheck()
+        try:
+            client = setup.reader(snap) if env_reads else None
+            env_changes = env.refresh(client, snap["fleet"], path=data_dir / env.ENV_FILE,
+                                      key=setup.snap.cache_key(setup.connection),
+                                      reads=getattr(setup, "read_budget", None) or env.ENV_READS)
+        except Exception:  # the env check must never break the snapshot
+            env_changes = {}
+    version = _caps()._read_version_file(_version_file(data_dir), setup.connection.base_url) if data_dir else {}
+    branches = _branch_heads_for(setup, snap, reads=env_reads)
+    return fleet_mod.View(snap, env_changes, version, branches,
+                          _number(setup.get_setting("disk_warn_percent", 85), 85, 1, 100),
+                          _number(setup.get_setting("memory_warn_percent", 90), 90, 1, 100))
+
+
+def _branches():
+    return importlib.import_module(".branches", __package__ or __name__)
+
+
+# M7: `ctx.dispatch_tool` from this profile's register(). Plugin modules load once per profile
+# (`hermes_plugins.<name>__home_<digest>`), so this holder never crosses profiles. A page route runs
+# in the plugin host child, where register() never ran (M0c): there it stays empty and the routes
+# leave Forgebrücke's apps to the tick and the agent's turns.
+_CTX_DISPATCH: dict[str, Any] = {}
+GIT_TOKEN_SETTING = "COOLIFY_COCKPIT_GIT_TOKEN"
+GIT_HOST_SETTING = "git_host"
+
+
+def forgebruecke_host() -> Optional[str]:
+    """Forgebrücke's Forgejo host when it is enabled in this profile, else None. Read from the
+    profile config, so it holds in the plugin host child too."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        plugins = (load_config_readonly() or {}).get("plugins") or {}
+    except Exception:
+        return None
+    if "forgebruecke" not in (plugins.get("enabled") or []):
+        return None
+    settings = (((plugins.get("entries") or {}).get("forgebruecke") or {}).get("settings")) or {}
+    return _branches().host_of(settings.get("url"))
+
+
+def branch_sources(setup: "_Setup") -> Optional[Any]:
+    """What this process may ask for branch heads. None in tests with an injected Coolify
+    transport and no git transport: they read only the stored answers."""
+    branches = _branches()
+    transport = setup.git_transport
+    dispatch = _CTX_DISPATCH.get("dispatch")
+    if transport is None and dispatch is None:
+        return None
+    token = setup.get_secret(GIT_TOKEN_SETTING) if setup.get_secret else None
+    return branches.Sources(forgebruecke_host=setup.forgebruecke_host() if callable(setup.forgebruecke_host) else None,
+                            dispatch=dispatch, git_token=token or None,
+                            git_host=branches.token_host(token, setup.get_setting(GIT_HOST_SETTING, None)),
+                            transport=transport)
+
+
+def _branch_heads_for(setup: "_Setup", snap: dict, *, reads: bool = True) -> dict:
+    """{app uuid: {head, commits?, source}} for the behind_branch signal: the stored answers, after
+    reading the due ones this process can ask (unless `reads` is off). Never raises."""
+    data_dir = setup.data_dir
+    if data_dir is None or not snap.get("fleet"):
+        return {}
+    branches = _branches()
+    try:
+        return branches.refresh(branch_sources(setup) if reads else None, snap.get("resources") or [],
+                                snap["fleet"], path=data_dir / branches.BRANCH_FILE,
+                                key=setup.snap.cache_key(setup.connection),
+                                reads=getattr(setup, "read_budget", None) or branches.BRANCH_READS)
+    except Exception:  # the branch check must never break the snapshot
+        return {}
+
+
+def with_attention(setup: "_Setup", snap: dict, *, env_reads: bool = True) -> dict:
+    fleet_mod = _fleet()
+    view = attention_view(setup, snap, env_reads=env_reads)
+    items = fleet_mod.attention(view)
+    out = dict(snap)
+    fleet = {k: dict(v) for k, v in (snap.get("fleet") or {}).items()}
+    for uuid, changed in view.env_changes.items():
+        if uuid in fleet:
+            fleet[uuid]["env_changed_at"] = changed
+    out["fleet"] = fleet
+    labels = {sig.id: sig.label for sig in fleet_mod.SIGNALS}
+    out["attention"] = [a.to_dict() | {"key": a.key, "badge": a.badge or labels.get(a.signal, a.signal)} for a in items]
+    out["summary"] = fleet_mod.summary(items)
+    out["thresholds"] = {"disk_warn_percent": view.disk_warn, "memory_warn_percent": view.memory_warn}
+    return out
 
 
 def _failure(error: Exception) -> dict:
@@ -315,7 +457,7 @@ def overview_text(get_setting: SettingGetter, get_secret: SecretGetter, *, proje
             raise
         return "Coolify overview unavailable: " + _failure(error)["message"]
     text = ctx.snap.render_overview(snap, project=project, environment=environment,
-                                    max_chars=ctx.snap.MAX_OVERVIEW_CHARS - 300)
+                                    max_chars=ctx.snap.MAX_OVERVIEW_CHARS - 300, attention=snap.get("attention"))
     notice = _overview_update_line(ctx, snap)  # M7: one line on the version and an available update
     return f"{notice}\n{text}" if notice else text
 
@@ -327,6 +469,7 @@ def deployments_text(get_setting: SettingGetter, get_secret: SecretGetter, *, re
         snap = ctx.snapshot()
         client = ctx.reader(snap)
         known = {d.get("uuid") for group in (snap.get("deployments") or {}).values() for d in group or []}
+        known |= {d.get("uuid") for d in snap.get("latest_deployments") or []}
         if not deployment_uuid and str(resource or "").strip() in known:
             deployment_uuid = str(resource).strip()  # a deployment id passed as the resource
         if deployment_uuid:
@@ -424,7 +567,7 @@ def api_setup(get_setting: SettingGetter, get_secret: SecretGetter) -> tuple[int
     steps = [
         {"id": "url", "setting": caps_mod.URL_SETTING, "set": bool(url) and url_error is None,
          "value": url or None, "error": url_error, "required": True},
-        # Any one token is a working setup; the action token is the one most setups start with.
+        # Any one token is a working setup; the API token is the one most setups start with.
         {"id": "action_token", "setting": caps_mod.ACTION_SETTING, "set": action, "required": not read},
         {"id": "read_token", "setting": caps_mod.READ_SETTING, "set": read, "required": False},
     ]
@@ -440,6 +583,40 @@ def api_snapshot(get_setting: SettingGetter, get_secret: SecretGetter, *, refres
                  **setup: Any) -> tuple[int, dict]:
     try:
         return 200, {"ok": True, **_Setup(get_setting, get_secret, **setup).snapshot(refresh=refresh)}
+    except Exception as error:
+        body = _with_hint(_failure(error))
+        return _status_for(body), body
+
+
+def api_server_metrics(get_setting: SettingGetter, get_secret: SecretGetter, range_id: str = "1h",
+                       **setup: Any) -> tuple[int, dict]:
+    """The server cards' series for one range and the disk estimate (servers.py). The 1 h range is
+    the snapshot's own series (no request); other ranges are read once per server and range and
+    kept beside the snapshot. Reads use the snapshot's reading token, so a scoped token reads none."""
+    servers_mod = importlib.import_module(".servers", __package__ or __name__)
+    try:
+        if range_id not in servers_mod.RANGES:
+            return 400, {"ok": False, "error": "bad_range",
+                         "message": f"range must be one of {', '.join(servers_mod.RANGES)}"}
+        ctx = _Setup(get_setting, get_secret, **setup)
+        snap = ctx.stored_snapshot() or ctx.snapshot()
+        servers = [s for s in snap.get("servers") or [] if isinstance(s, dict)]
+        by_uuid = {s.get("uuid"): s for s in servers}
+        client = None
+
+        def read(server_uuid: str, minutes: int):
+            nonlocal client
+            if minutes == servers_mod.RANGES["1h"]:
+                metrics = (by_uuid.get(server_uuid) or {}).get("metrics")
+                return (metrics, None) if metrics else (None, "no metrics in the snapshot")
+            if client is None:
+                client = ctx.reader(snap)
+            return ctx.snap._metrics(client, server_uuid, minutes)
+
+        path = ctx.data_dir / servers_mod.METRICS_FILE if ctx.data_dir is not None else None
+        body = servers_mod.range_payload(read, servers, range_id, path=path,
+                                         key=ctx.snap.cache_key(ctx.connection))
+        return 200, {"ok": True, **body}
     except Exception as error:
         body = _with_hint(_failure(error))
         return _status_for(body), body
@@ -649,8 +826,10 @@ COOLIFY_ACTION = {
         "needs params.commit). Each call asks the user for approval in Hermes, naming the action, "
         "resource, project, environment and server; nothing is sent before they approve. Refused "
         "without asking in unattended runs (cron jobs, webhooks, single-query `hermes chat -q`), "
-        "when the action token lacks the deploy right, or when the target is outside the action "
-        "token's view. Uses only the action token, never the overview token. stop always sends "
+        "on a protected environment (setting protected_environments, default production) unless the "
+        "user switched agent_on_protected on, "
+        "when the API token lacks the deploy right, or when the target is outside the API "
+        "token's view. Uses only the API token, never the read-only token. stop always sends "
         "docker_cleanup=false. Returns Coolify's answer and the deployment uuid where Coolify "
         "creates one; follow it with coolify_deployments. Check coolify_capabilities first if "
         "unsure whether actions are available."
@@ -823,6 +1002,39 @@ def _refusal(code: str, message: str) -> dict:
     return {"ok": False, "error": code, "message": message, "sent": False}
 
 
+# Protected environments (A8, T4): the agent is refused on them unless the user switched
+# `agent_on_protected` on; then every call still asks, under a one-time approval key, because
+# Hermes' "for this session" and "always" persist per key. An unknown environment counts as
+# protected (fail closed): a team-wide token may reach production, and a false refusal costs the
+# user one click on his own Deploy button, which is never refused here.
+
+PROTECTED_SETTING = "protected_environments"
+PROTECTED_SWITCH = "agent_on_protected"
+PROTECTED_DEFAULT = "production"
+
+
+def protected_environments(get_setting: SettingGetter) -> list[str]:
+    raw = get_setting(PROTECTED_SETTING, PROTECTED_DEFAULT)
+    if raw is None:
+        raw = PROTECTED_DEFAULT
+    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    return sorted({str(x).strip().lower() for x in items if str(x).strip()})
+
+
+def is_protected(get_setting: SettingGetter, environment: Optional[str]) -> bool:
+    if not str(environment or "").strip():
+        return True  # unknown: fail closed
+    return str(environment).strip().lower() in protected_environments(get_setting)
+
+
+def protected_refusal(environment: Optional[str]) -> dict:
+    where = f"{environment} is a protected environment" if environment else \
+        "the target's environment is unknown, so it counts as protected"
+    return _refusal("protected", f"{where}, and the agent may not act there (setting \"Agent may act on "
+                                 "protected environments\" is off). The user can run it with the cockpit's own "
+                                 "button, or switch that setting on.")
+
+
 def action_precheck(get_setting: SettingGetter, run: RunContext) -> Optional[dict]:
     """The agent-lane refusals that need no Coolify request at all."""
     if not _as_bool(get_setting("agent_actions", True), True):
@@ -854,7 +1066,7 @@ def _connection(get_setting: SettingGetter, get_secret: SecretGetter):
 def stored_environment_names(connection: Any, cache_file: Any = "default") -> Optional[dict]:
     """Environment id -> (project, environment) from the stored snapshot while its names are
     younger than ENVIRONMENTS_TTL_S; None without a snapshot file (outside Hermes) or when stale.
-    Names only: which resources the action token can see still comes from its own lists."""
+    Names only: which resources the API token can see still comes from its own lists."""
     snap_mod = _snap()
     path = _default_cache_file() if cache_file == "default" else cache_file
     if path is None:
@@ -900,8 +1112,16 @@ def make_action_gate(get_setting: SettingGetter, get_secret: SecretGetter, run_c
         except Exception as error:  # fail closed
             return {"action": "block", "message": _block_text(_refusal("internal", type(error).__name__ + "."))}
         rule_key = f"coolify_action:{act.spec.kind}:{act.target.uuid}"
+        message = act.approval_text()
+        if is_protected(get_setting, act.target.environment):
+            if not _as_bool(get_setting(PROTECTED_SWITCH, False), False):
+                return {"action": "block", "message": _block_text(protected_refusal(act.target.environment))}
+            import secrets as _secrets
+            rule_key += ":protected:" + _secrets.token_hex(6)  # one-time: never "for this session"
+            where = (act.target.environment or "unknown environment").upper()
+            message = f"PROTECTED ENVIRONMENT {where}. " + message
         tickets.issue(key, act.request.signature(), rule_key)
-        return {"action": "approve", "message": act.approval_text(), "rule_key": rule_key}
+        return {"action": "approve", "message": message, "rule_key": rule_key}
 
     return coolify_action_gate
 
@@ -954,6 +1174,8 @@ def run_approved_action(get_setting: SettingGetter, get_secret: SecretGetter, ar
     if act.request.signature() != approved:
         return _refusal("not_approved", "The target resolved to a different request than the one approved "
                                         "(it changed in between); nothing was sent. Ask again.")
+    if is_protected(get_setting, act.target.environment) and not _as_bool(get_setting(PROTECTED_SWITCH, False), False):
+        return protected_refusal(act.target.environment)
     kwargs = {"transport": transport} if transport is not None else {}
     return render_action_result(acts.execute(act, **kwargs))
 
@@ -1048,7 +1270,7 @@ COOLIFY_COCKPIT = {
         "presets), add_widget (widget {type, id?, title?, size s|m|l, props}, position), "
         "remove_widget (widget_id), update_widget (widget_id, changes {title?, size?, props?}; props "
         "merge, null removes one), move_widget (widget_id, position: 0 = top, -1 = bottom), "
-        "apply_preset (preset overview | deploy_desk | server_watch, params, placement replace | top "
+        "apply_preset (preset overview | deploy_desk, params, placement replace | top "
         "| bottom). Widget types, as type (the name the page and the user call it): {widget_types}. "
         "To add one, call add_widget directly with widget {type} (props are optional and take their "
         "defaults) and position 0 for the top; get is needed only for current ids or props. A "
@@ -1074,7 +1296,7 @@ COOLIFY_COCKPIT = {
             "changes": {"type": "object", "description": "update_widget: {title?, size?, props?}."},
             "position": {"type": "integer",
                          "description": "add/move: 0 = top, -1 = bottom (add defaults to the bottom)."},
-            "preset": {"type": "string", "enum": ["overview", "deploy_desk", "server_watch"]},
+            "preset": {"type": "string", "enum": ["overview", "deploy_desk"]},
             "params": {"type": "object",
                        "description": "apply_preset: deploy_desk takes environment, project, row_actions, "
                                       "buttons [{kind, target, params?, label?}]."},
@@ -1541,7 +1763,7 @@ def expand_context_reference(raw: str, get_setting: SettingGetter, get_secret: S
         servers = snap.get("servers") or []
         if not servers and (snap.get("source") or {}).get("scope") != "team-wide":
             return refs.framed(ref, "Servers are not readable with this token setup (scoped tokens cannot "
-                                    "read servers). Add a team-wide read-only overview token to see them.")
+                                    "read servers). Add a team-wide read-only token to see them.")
         server = refs.find_server(servers, target.value)
         if server is None:
             listed = ", ".join(f"{s.get('name')} ({s.get('uuid')})" for s in servers) or "none"
@@ -1633,3 +1855,210 @@ def _register_agent_kit(ctx, get_setting: SettingGetter) -> None:
         ctx.register_context_reference(provider)  # a second load's duplicate is refused with a warning
 
 # --- end M8 ------------------------------------------------------------------------------------
+
+
+# --- 0.1.0 M6: alerts as a no-model cron job, the morning digest (alerts.py) ---------------------
+#
+# `hermes coolify-cockpit tick` runs where the plugin ctx exists (a Hermes CLI process), so it can
+# also ask Forgebrücke for branch heads (M7). `alerts on` writes the shim script and creates the cron
+# job that runs it; `alerts off` removes both; `alerts status` reads them back. The agent can do the
+# same from a chat with its cronjob tool (the skill says how), which delivers into that chat.
+
+def _alerts():
+    return importlib.import_module(".alerts", __package__ or __name__)
+
+
+TICK_READS = 40  # env and branch reads one tick may spend: his 28 apps in one run, far below 200 a minute
+
+
+def tick_report(get_setting: SettingGetter, get_secret: SecretGetter, *, peek: bool = False,
+                now: Optional[float] = None, **setup: Any) -> tuple[str, dict]:
+    """(text to deliver, facts). Reads a fresh snapshot with its Attention list, compares it with
+    the stored alert state and returns what is new or recovered. `peek` leaves the state alone."""
+    alerts = _alerts()
+    setup.setdefault("read_budget", TICK_READS)
+    try:
+        ctx = _Setup(get_setting, get_secret, **setup)
+    except Exception as error:
+        return "", {"ok": False, **_failure(error)}
+    # The instance is the identity, not the token: a rotated token must not announce everything again
+    # (measured: the token was rotated during this build and the next run counted as a first run).
+    key = ctx.connection.base_url
+    path = ctx.data_dir / alerts.STATE_FILE if ctx.data_dir is not None else None
+    state = alerts.load_state(path, key)
+    host = _branches().host_of(ctx.connection.base_url) or ctx.connection.base_url
+    try:
+        snap = ctx.snapshot(refresh=True)
+        items = list(snap.get("attention") or [])
+        held = [u for u, row in (snap.get("fleet") or {}).items() if (row or {}).get("state") in ("deploying", "failing")]
+    except Exception as error:
+        failure = _failure(error)
+        if failure["error"] not in ("unreachable", "unauthorized", "unavailable"):
+            return "", {"ok": False, **failure}  # rate limited or a bug: no verdict, state unchanged
+        kind = "unauthorized" if failure["error"] == "unauthorized" or "401" in failure["message"] else "unreachable"
+        items = [alerts.unreachable_item(kind, failure["message"])]
+        items += [{**v, "key": k} for k, v in ((state or {}).get("open") or {}).items() if k != "coolify_unreachable:-"]
+        held = []
+    confirm = {sig.id: sig.confirm for sig in _fleet().SIGNALS}
+    new, recovered, nxt = alerts.diff(items, state, key=key, held=held, confirm=confirm, now=now)
+    if not peek:
+        alerts.save_state(path, nxt)
+    facts = {"ok": True, "first_run": state is None, "open": len(nxt["open"]), "new": len(new),
+             "recovered": len(recovered), "peek": peek}
+    return alerts.render(new, recovered, host=host), facts
+
+
+def _cron_jobs():
+    from cron import jobs as cron_jobs  # Hermes' own scheduler store, the active profile's
+    return cron_jobs
+
+
+def alerts_status(data_dir: Any = "default", *, jobs: Any = None, get_setting: Optional[SettingGetter] = None,
+                  get_secret: Optional[SecretGetter] = None) -> dict:
+    alerts = _alerts()
+    try:
+        listed = jobs if jobs is not None else _cron_jobs().list_jobs(include_disabled=True)
+    except Exception:
+        listed = []
+    ours = alerts.our_jobs(listed)
+    data_dir = _resolve_data_dir(data_dir)
+    state = None
+    if data_dir is not None:
+        try:
+            state = json.loads((data_dir / alerts.STATE_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = None
+    out = alerts.describe(ours[0] if ours else None, state)
+    out["jobs"] = len(ours)
+    return out
+
+
+def alerts_on(every: str, deliver: str, *, home: Any = None) -> dict:
+    """Write the shim and (re)create the one cron job that runs it. Idempotent: an earlier job of
+    the cockpit is replaced, so a second `alerts on` changes the cadence instead of adding a job."""
+    from pathlib import Path
+    alerts = _alerts()
+    cron_jobs = _cron_jobs()
+    if home is None:
+        from hermes_constants import get_hermes_home
+        home = get_hermes_home()
+    script = alerts.write_shim(Path(home))
+    removed = []
+    for job in alerts.our_jobs(cron_jobs.list_jobs(include_disabled=True)):
+        cron_jobs.remove_job(job["id"])
+        removed.append(job["id"])
+    job = cron_jobs.create_job(None, every, name=alerts.JOB_NAME, deliver=deliver, script=script.name,
+                               no_agent=True)
+    return {"job_id": job["id"], "schedule": job.get("schedule_display"), "deliver": job.get("deliver"),
+            "script": str(script), "replaced": removed}
+
+
+def alerts_off(*, home: Any = None) -> dict:
+    from pathlib import Path
+    alerts = _alerts()
+    cron_jobs = _cron_jobs()
+    if home is None:
+        from hermes_constants import get_hermes_home
+        home = get_hermes_home()
+    removed = []
+    for job in alerts.our_jobs(cron_jobs.list_jobs(include_disabled=True)):
+        cron_jobs.remove_job(job["id"])
+        removed.append(job["id"])
+    script = Path(home) / "scripts" / alerts.SCRIPT_NAME
+    existed = script.exists()
+    if existed:
+        script.unlink()
+    return {"removed_jobs": removed, "removed_script": existed}
+
+
+def _cli_setup(subparser) -> None:
+    sub = subparser.add_subparsers(dest="cockpit_command")
+    tick = sub.add_parser("tick", help="Print what needs you that is new since the last tick (for cron)")
+    tick.add_argument("--peek", action="store_true", help="show it without marking it as announced")
+    tick.add_argument("--json", action="store_true", help="also print the facts as JSON")
+    al = sub.add_parser("alerts", help="Alerts with Desktop closed: a cron job without a model turn")
+    al_sub = al.add_subparsers(dest="alerts_command")
+    on = al_sub.add_parser("on", help="Write the alert script and create (or replace) its cron job")
+    on.add_argument("--every", default=_alerts().DEFAULT_EVERY, help="how often, e.g. 5m, 15m, 1h (default 5m)")
+    on.add_argument("--deliver", default="local",
+                    help="where alerts go: local (Hermes' job output), or a connected platform such as telegram")
+    al_sub.add_parser("off", help="Remove the cron job and the script")
+    al_sub.add_parser("status", help="Is the job on, how often, when it last checked")
+
+
+def make_cli_handler(get_setting: SettingGetter, get_secret: SecretGetter = _default_secret):
+    def handler(args) -> int:
+        command = getattr(args, "cockpit_command", None)
+        if command == "tick":
+            text, facts = tick_report(get_setting, get_secret, peek=bool(getattr(args, "peek", False)))
+            if text:
+                print(text, end="")
+            if getattr(args, "json", False):
+                print(json.dumps(facts, ensure_ascii=False))
+            return 0 if facts.get("ok") or facts.get("error") in ("rate_limited", "not_configured") else 1
+        if command == "alerts":
+            sub = getattr(args, "alerts_command", None)
+            if sub == "on":
+                out = alerts_on(str(args.every), str(args.deliver))
+                print(f"Alerts on: {out['schedule']}, delivered to {out['deliver']} (job {out['job_id']}).")
+                if out["replaced"]:
+                    print(f"Replaced the earlier job {', '.join(out['replaced'])}.")
+                print("The first run lists everything that needs you now; after that only what is new or recovered.")
+                return 0
+            if sub == "off":
+                out = alerts_off()
+                print("Alerts off." if out["removed_jobs"] or out["removed_script"] else "Alerts were off.")
+                return 0
+            status = alerts_status()
+            if status["on"]:
+                age = status.get("last_check_age_s")
+                seen = f", last check {age // 60} min ago" if isinstance(age, int) else ", not run yet"
+                print(f"Alerts on: {status['schedule']}, delivered to {status['deliver']}{seen}, "
+                      f"{status['open']} open item(s).")
+            else:
+                print("Alerts off. Turn them on with: hermes coolify-cockpit alerts on")
+            return 0
+        print("Usage: hermes coolify-cockpit {tick,alerts {on,off,status}}")
+        return 2
+
+    return handler
+
+
+def api_alerts(*, data_dir: Any = "default") -> tuple[int, dict]:
+    try:
+        return 200, {"ok": True, **alerts_status(data_dir)}
+    except Exception as error:
+        return 500, {"ok": False, "error": "internal", "message": f"{type(error).__name__}: {error}"}
+
+
+DIGEST_PROMPT = (
+    "Morning digest for my Coolify instance. Call coolify_overview once and write at most 8 short "
+    "lines: what needs me (the NEEDS YOU list, worst first, each with its fix), then one line on "
+    "the latest deploys it lists (how many failed, and whether a later deploy fixed them), then one "
+    "line per server only if NEEDS YOU names it. If nothing needs me, say so in one line. Do not act "
+    "on anything."
+)
+
+
+def _register_alerts(ctx, get_setting: SettingGetter) -> None:
+    _CTX_DISPATCH["dispatch"] = getattr(ctx, "dispatch_tool", None)  # M7: Forgebrücke's branch heads
+    if hasattr(ctx, "register_cli_command"):
+        ctx.register_cli_command(name="coolify-cockpit", help="Coolify Cockpit: tick and alerts",
+                                 setup_fn=_cli_setup, handler_fn=make_cli_handler(get_setting),
+                                 description="Coolify Cockpit commands (tick, alerts on/off/status).")
+    if hasattr(ctx, "register_automation_blueprint"):
+        try:
+            ctx.register_automation_blueprint(
+                "morning-digest", title="Coolify morning digest",
+                description="Each morning: what needs you on Coolify, yesterday's deploys, servers under pressure.",
+                schedule_template="{minute} {hour} * * *", prompt_template=DIGEST_PROMPT, category="devops",
+                slots=[{"name": "time", "type": "time", "label": "What time?", "default": "08:00",
+                        "help": "24h local time, e.g. 08:00"},
+                       {"name": "deliver", "type": "enum", "label": "Where to deliver?", "default": "origin",
+                        "options": ("origin", "local", "telegram", "discord", "email"), "strict": False,
+                        "help": "origin = the chat you set this up from; local = save only"}],
+                skills=("coolify-cockpit:coolify-cockpit",), tags=("coolify", "digest"))
+        except Exception:
+            pass  # an older Hermes without blueprints, or a second load in this process
+
+# --- end 0.1.0 M6 ---------------------------------------------------------------------------------

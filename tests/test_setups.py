@@ -2,6 +2,8 @@
 unreachable instance and a rejected token, gives the right available / not-available lists."""
 
 import json
+import pathlib
+import re
 
 import pytest
 
@@ -26,14 +28,14 @@ def test_recommended_pair_unlocks_everything_but_live_logs(kit):
     assert ids(out["available"]) == without("live_logs")
     assert list(missing(out)) == ["live_logs"]
     assert "paste failed logs" in missing(out)["live_logs"]["unlock"]
-    assert "read:sensitive` to the action token's scope" in missing(out)["live_logs"]["unlock"]
-    assert out["routing"] == {"reads": "overview", "servers": "overview", "logs": None, "actions": "action"}
+    assert "read:sensitive` to the API token's scope" in missing(out)["live_logs"]["unlock"]
+    assert out["routing"] == {"reads": "read_only", "servers": "read_only", "logs": None, "actions": "api"}
     action, overview = out["tokens"]
-    assert (action["role"], action["scope"], action["rights"]) == ("action", "scoped", ["read", "deploy"])
+    assert (action["role"], action["scope"], action["rights"]) == ("api", "scoped", ["read", "deploy"])
     assert action["sees"]["applications"] == 8
     assert action["sees"]["environments_by_name"] == {"staging": 5}
     assert action["sees"]["servers"].startswith("refused")
-    assert (overview["role"], overview["scope"], overview["rights"]) == ("overview", "team-wide", ["read"])
+    assert (overview["role"], overview["scope"], overview["rights"]) == ("read_only", "team-wide", ["read"])
     assert overview["sees"]["servers"] == 2
     assert out["warnings"] == []
 
@@ -46,7 +48,7 @@ def test_single_scoped_token_names_server_stats_and_partial_view(kit):
     assert gone["server_stats"]["reason"] == "No server stats (scoped tokens cannot read servers)"
     assert gone["team_view"]["reason"] == "Only the 5 project(s) inside the token's scope are visible"
     assert "COOLIFY_COCKPIT_READ_TOKEN" in gone["servers"]["unlock"]
-    assert "the single token's scope" in gone["live_logs"]["unlock"]
+    assert "the API token's scope" in gone["live_logs"]["unlock"]
     assert out["tokens"][0]["role"] == "single"
     assert out["routing"]["actions"] == "single"
 
@@ -55,7 +57,7 @@ def test_single_teamwide_read_token_is_a_read_only_cockpit(kit):
     out, _ = kit.report(read="teamwide_read")
     assert ids(out["available"]) == without("actions", "live_logs")
     gone = missing(out)
-    assert gone["actions"]["reason"] == "No actions (the single token lacks `deploy`)"
+    assert gone["actions"]["reason"] == "No actions (the API token lacks `deploy`)"
     assert "deploy" in gone["actions"]["unlock"]
     assert gone["live_logs"]["reason"] == "No live logs (no token holds `read:sensitive`)"
     assert out["tokens"][0]["setting"] == "COOLIFY_COCKPIT_READ_TOKEN"
@@ -104,18 +106,18 @@ def test_rejected_overview_token_leaves_the_action_token_working(kit):
     out, _ = kit.report(action="scoped_read_deploy", read="rejected")
     assert "actions" in ids(out["available"])
     gone = missing(out)
-    assert gone["servers"]["reason"].endswith("the overview token was rejected (401 Unauthenticated)")
+    assert gone["servers"]["reason"].endswith("the read-only token was rejected (401 Unauthenticated)")
 
 
 def test_actions_never_fall_back_to_the_overview_token(kit):
     out, _ = kit.report(action="scoped_read_deploy", read="teamwide_read_deploy")
-    assert out["routing"]["actions"] == "action"
+    assert out["routing"]["actions"] == "api"
     out, _ = kit.report(action="teamwide_read", read="teamwide_read_deploy")
     gone = missing(out)
     assert "actions" in gone
-    assert "never use the overview token" in gone["actions"]["reason"]
+    assert "never use the read-only token" in gone["actions"]["reason"]
     assert out["routing"]["actions"] is None
-    assert any("overview token also holds deploy" in w for w in out["warnings"])
+    assert any("read-only token also holds deploy" in w for w in out["warnings"])
 
 
 def test_update_notice_compares_with_the_release_feed(kit):
@@ -164,3 +166,46 @@ def test_handler_returns_json_and_never_raises(kit):
     handler = kit.plugin.make_capabilities_handler(broken_setting, lambda name: None)
     out = json.loads(handler({}))
     assert out == {"ok": False, "error": "internal", "message": "RuntimeError: config unreadable"}
+
+
+# --- 0.1.0 M3: the result line per token fixture ----------------------------------------------
+
+@pytest.mark.parametrize("action, read, line, extra", [
+    ("teamwide_read_deploy", None, "Team-wide · read, deploy · 14 apps · 2 servers", {"tone": "good", "chip": None}),
+    ("teamwide_read", None, "Team-wide · read · 14 apps · 2 servers", {"tone": "warn"}),
+    ("scoped_read_deploy", None, "Limited to 5 projects · read, deploy · 8 apps · no servers",
+     {"tone": "warn", "add_read_token": True}),
+    ("scoped_read_deploy", "teamwide_read", "Limited to 5 projects · read, deploy · 8 apps · read-only token adds servers",
+     {"add_read_token": False}),
+    ("teamwide_read_deploy_write_delete", None, "Team-wide · read, deploy · 14 apps · 2 servers",
+     {"chip": "can change and delete"}),
+    ("teamwide_full", None, "Team-wide · read, deploy, read:sensitive · 14 apps · 2 servers",
+     {"chip": None}),  # "full" is read + deploy + read:sensitive; write and delete answer 403
+    ("rejected", None, "Rejected by Coolify (401) · check the token", {"tone": "bad"}),
+])
+def test_each_token_fixture_renders_its_result_line(kit, action, read, line, extra):
+    out, _ = kit.report(action=action, read=read)
+    setup = out["setup"]
+    assert setup["line"] == line
+    for key, value in extra.items():
+        assert setup[key] == value, key
+    assert len(setup["line"]) <= 90
+
+
+def test_unreachable_instance_has_one_result_line(kit):
+    out, _ = kit.report(action="teamwide_read_deploy", unreachable=True)
+    assert out["setup"]["line"] == "Coolify did not answer · check the URL"
+
+
+def test_no_surface_says_action_or_overview_token(kit):
+    texts = []
+    for action, read in (("scoped_read_deploy", "teamwide_read"), ("teamwide_read", None), ("rejected", "teamwide_read"),
+                         ("teamwide_read_deploy_write_delete", "teamwide_read_deploy")):
+        out, _ = kit.report(action=action, read=read)
+        texts.append(json.dumps(out))
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for rel in ("plugin.yaml", "capabilities.py", "actions.py", "snapshot.py", "__init__.py", "desktop/plugin.js"):
+        texts.append((root / rel).read_text())
+    joined = "\n".join(texts).lower()
+    joined = re.sub(r'"\s*\n\s*f?"', "", joined)  # strings split over two source lines
+    assert "action token" not in joined and "overview token" not in joined

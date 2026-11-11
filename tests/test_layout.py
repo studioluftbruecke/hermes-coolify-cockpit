@@ -35,8 +35,8 @@ def errors_of(lay, fn, *args):
 
 def test_one_widget_type_per_product_widget_each_tied_to_a_feature_rule(plugin, lay):
     caps = importlib.import_module(plugin.__name__ + ".capabilities")
-    assert list(lay.TYPES) == ["connection", "servers", "resources", "deployments", "quick_actions", "diagnosis",
-                               "update_notice", "notebook", "backups", "chat"]
+    # 0.1.0 (A9): connection, diagnosis, update_notice and backups left; summary is new
+    assert list(lay.TYPES) == ["summary", "deployments", "resources", "servers", "quick_actions", "notebook", "chat"]
     rule_ids = {r.id for r in caps.FEATURE_RULES}
     for wtype in lay.WIDGET_TYPES:
         assert wtype.feature is None or wtype.feature in rule_ids, wtype.type
@@ -51,7 +51,7 @@ def test_one_widget_type_per_product_widget_each_tied_to_a_feature_rule(plugin, 
 def test_annotate_says_why_a_widget_is_not_available(lay):
     layout = lay.validate_layout({"widgets": [
         {"id": "s", "type": "servers", "props": {}}, {"id": "q", "type": "quick_actions", "props": {}},
-        {"id": "n", "type": "notebook", "props": {}}, {"id": "d", "type": "diagnosis", "props": {}}]})
+        {"id": "n", "type": "notebook", "props": {}}, {"id": "d", "type": "deployments", "props": {}}]})
     features = [
         {"id": "servers", "available": False, "reason": "No server data (scoped tokens cannot read servers)",
          "unlock": "add a team-wide read-only token"},
@@ -62,7 +62,7 @@ def test_annotate_says_why_a_widget_is_not_available(lay):
     assert rows["s"]["available"] is False and "scoped tokens" in rows["s"]["reason"]
     assert rows["s"]["unlock"] == "add a team-wide read-only token"
     assert rows["q"]["available"] is True and rows["n"]["available"] is True
-    assert rows["d"]["available"] is True and rows["d"]["limits"] == ["live_logs: No live logs"]
+    assert rows["d"]["available"] is True and "limits" not in rows["d"]  # 0.1.0: no live-logs line on the card
 
 
 # --- validation ----------------------------------------------------------------------------------
@@ -78,7 +78,7 @@ def test_unknown_and_mistyped_props_are_rejected_clearly(lay):
                      "props": {"environment": 3, "colour": "red", "status": "sleeping"}})
     assert "unknown prop(s) colour; known: project, environment" in msg
     assert "props.environment must be text" in msg
-    assert "props.status must be one of any, running, stopped, unhealthy" in msg
+    assert "props.status must be one of any, running, stopped, unhealthy, attention" in msg
     assert "size must be one of s, m, l" in msg
 
 
@@ -88,7 +88,7 @@ def test_ids_title_and_layout_fields_are_checked(lay):
     msg = errors_of(lay, lay.validate_layout, {"widgets": [{"id": "a", "type": "chat"}, {"id": "a", "type": "notebook"}],
                                                "theme": "dark"})
     assert "unknown field(s) theme" in msg and "'a' is used twice" in msg
-    assert "schema" in errors_of(lay, lay.validate_layout, {"schema": 2, "widgets": []})
+    assert "schema" in errors_of(lay, lay.validate_layout, {"schema": 1, "widgets": []})
     assert "deploy_desk" in errors_of(lay, lay.validate_layout, {"preset": "fancy", "widgets": []})
 
 
@@ -98,7 +98,7 @@ def test_ints_and_lists_have_bounds(lay):
     msg = errors_of(lay, lay.validate_widget, {"id": "c", "type": "chat", "props": {"suggestions": ["q"] * 7}})
     assert "at most 6" in msg
     widget = lay.validate_widget({"id": "d", "type": "deployments", "props": {"limit": 5, "environment": " staging "}})
-    assert widget.props == {"limit": 5, "environment": "staging"} and widget.size == "m"
+    assert widget.props == {"limit": 5, "environment": "staging"} and widget.size == "l"
 
 
 # --- quick actions: kinds come from the ActionSpec registry ----------------------------------------
@@ -136,12 +136,11 @@ def test_row_actions_take_parameterless_resource_actions_only(lay):
 # --- presets -------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name,params,types", [
-    ("overview", None, ["resources", "servers", "deployments", "resources", "connection"]),
-    ("deploy_desk", {"environment": "staging"}, ["resources", "deployments", "diagnosis"]),
+    ("overview", None, ["summary", "deployments", "resources", "servers"]),
+    ("deploy_desk", {"environment": "staging"}, ["resources", "deployments"]),
     ("deploy_desk", {"environment": "staging", "project": "shop",
                      "buttons": [{"kind": "restart", "target": "shop-web-staging"}]},
-     ["quick_actions", "resources", "deployments", "diagnosis"]),
-    ("server_watch", None, ["servers", "update_notice", "notebook"]),
+     ["quick_actions", "resources", "deployments"]),
 ])
 def test_each_preset_round_trips_through_the_file(lay, tmp_path, name, params, types):
     store = lay.LayoutStore(tmp_path / "layout.json")
@@ -171,9 +170,26 @@ def test_preset_on_top_keeps_the_current_widgets_and_renames_clashes(lay):
     current = lay.default_layout()
     first = lay.place_preset(current, "deploy_desk", {"environment": "staging"}, "top")
     twice = lay.place_preset(first, "deploy_desk", {"environment": "staging"}, "top")
-    assert [w.id for w in first.widgets][:3] == ["deploy-resources-2", "deploy-deployments", "deploy-diagnosis"]
-    assert [w.id for w in first.widgets][3:] == ["deploy-resources", "servers", "deployments", "resources", "connection"]
-    assert twice.widgets[0].id == "deploy-resources-3" and first.preset == "overview"
+    assert [w.id for w in first.widgets][:2] == ["deploy-apps", "deploy-deployments"]
+    assert [w.id for w in first.widgets][2:] == ["summary", "deployments", "apps", "servers"]
+    assert [w.id for w in twice.widgets][:2] == ["deploy-apps-2", "deploy-deployments-2"] and first.preset == "overview"
+
+
+def test_a_0011_layout_opens_on_the_new_default_without_a_warning_and_saves_as_schema_2(lay, store):
+    # The file 0.0.11 wrote on his Mac test (schema 1, his staging deploy desk on top).
+    old = {"schema": 1, "version": 7, "preset": "overview", "updated_at": "2026-11-09T20:00:00Z", "updated_by": "pane",
+           "widgets": [{"id": "deploy-resources", "type": "resources", "title": "Deploy desk: staging", "size": "l",
+                        "props": {"environment": "staging", "row_actions": ["deploy", "restart"]}},
+                       {"id": "servers", "type": "servers", "size": "l", "props": {}},
+                       {"id": "connection", "type": "connection", "size": "l", "props": {}}]}
+    store.path.write_text(json.dumps(old))
+    layout = store.load()
+    assert [w.type for w in layout.widgets] == ["summary", "deployments", "resources", "servers"]
+    assert layout.warnings == [] and layout.version == 7  # the stored version: the next save does not conflict
+    saved = store.update(lambda cur: lay.move_widget(cur, "servers", 0)[0], 7, by="pane")
+    on_disk = json.loads(store.path.read_text())
+    assert on_disk["schema"] == 2 and on_disk["version"] == 8 and on_disk["widgets"][0]["id"] == "servers"
+    assert saved.version == 8
 
 
 def test_no_file_means_the_overview_preset_at_version_zero(store):
@@ -230,11 +246,11 @@ def test_the_layout_file_survives_a_reload(plugin, lay, store):
     store.update(lambda cur: lay.add_widget(cur, {"type": "quick_actions", "props": {
         "buttons": [{"kind": "restart", "target": "shop-web-staging"}]}}, 0)[0], by="agent")
     on_disk = json.loads(store.path.read_text())
-    assert on_disk["version"] == 1 and on_disk["schema"] == 1 and on_disk["updated_by"] == "agent"
+    assert on_disk["version"] == 1 and on_disk["schema"] == 2 and on_disk["updated_by"] == "agent"
     reloaded = importlib.reload(lay)
     again = reloaded.LayoutStore(store.path).load()
     assert again.widgets[0].props["buttons"] == [{"kind": "restart", "target": "shop-web-staging"}]
-    assert again.version == 1 and len(again.widgets) == 6
+    assert again.version == 1 and len(again.widgets) == 5
 
 
 def test_a_hand_edited_bad_widget_is_skipped_with_a_warning(lay, store):
@@ -243,7 +259,7 @@ def test_a_hand_edited_bad_widget_is_skipped_with_a_warning(lay, store):
     raw["widgets"].append({"id": "t", "type": "terminal", "props": {}})
     store.path.write_text(json.dumps(raw))
     layout = store.load()
-    assert len(layout.widgets) == 5 and "terminal" in layout.warnings[0]
+    assert len(layout.widgets) == 4 and "terminal" in layout.warnings[0]
 
 
 def test_an_unreadable_file_is_reported_and_kept_aside_on_start_over(lay, store):
@@ -269,8 +285,8 @@ def no_network(monkeypatch):
 def test_tool_get_shows_layout_types_and_presets(plugin, store, no_network):
     out = tool(plugin, store, operation="get")
     assert out["ok"] and out["layout"]["version"] == 0
-    assert out["layout"]["widgets"][0].startswith("0. deploy-resources resources (l)")
-    assert out["layout"]["widgets"][-1] == "4. connection connection (l)"
+    assert out["layout"]["widgets"][0] == "0. summary summary (l)"
+    assert out["layout"]["widgets"][-1] == "3. servers servers (l)"
     assert any(line.startswith("quick_actions: Quick actions needs feature actions") for line in out["widget_types"])
     assert any(p.startswith("deploy_desk:") for p in out["presets"])
     assert len(json.dumps(out)) < 4000  # compact for the model
@@ -288,11 +304,11 @@ def test_tool_operations_edit_only_the_layout(plugin, store, no_network):
     out = tool(plugin, store, operation="add_widget", widget={"type": "chat", "props": {"suggestions": ["why?"]}},
                position=1)
     assert out["changed"] == "added chat (chat) at position 1"
-    out = tool(plugin, store, operation="update_widget", widget_id="deploy-resources",
+    out = tool(plugin, store, operation="update_widget", widget_id="deploy-apps",
                changes={"size": "m", "props": {"row_actions": ["deploy"], "project": None}})
-    assert "deploy-resources resources (m)" in " ".join(out["layout"]["widgets"])
+    assert "deploy-apps resources (m)" in " ".join(out["layout"]["widgets"])
     out = tool(plugin, store, operation="move_widget", widget_id="chat", position=-1)
-    assert out["layout"]["widgets"][-1].startswith("9. chat chat")
+    assert out["layout"]["widgets"][-1].startswith("7. chat chat")
     out = tool(plugin, store, operation="remove_widget", widget_id="chat")
     assert out["changed"] == "removed chat (chat)" and out["layout"]["version"] == 5
     assert store.load().version == 5
@@ -300,13 +316,13 @@ def test_tool_operations_edit_only_the_layout(plugin, store, no_network):
 
 def test_tool_rejects_bad_input_and_saves_nothing(plugin, store, no_network):
     bad = tool(plugin, store, operation="add_widget", widget={"type": "terminal"})
-    assert bad["ok"] is False and bad["error"] == "invalid" and "known: connection" in bad["message"]
+    assert bad["ok"] is False and bad["error"] == "invalid" and "known: summary" in bad["message"]
     assert bad["note"] == "Nothing was saved."
     bad = tool(plugin, store, operation="add_widget",
                widget={"type": "quick_actions", "props": {"buttons": [{"kind": "delete", "target": "x"}]}})
     assert "unknown action 'delete'" in bad["message"]
     bad = tool(plugin, store, operation="remove_widget", widget_id="nope")
-    assert bad["error"] == "not_found" and "connection" in bad["message"]
+    assert bad["error"] == "not_found" and "summary" in bad["message"]
     bad = tool(plugin, store, operation="explode")
     assert "Unknown operation" in bad["message"]
     assert not store.path.exists()  # nothing was written
@@ -316,7 +332,7 @@ def test_tool_with_a_stale_expected_version_gets_the_current_layout(plugin, lay,
     store.save(lay.default_layout(), 0, by="pane")
     out = tool(plugin, store, operation="remove_widget", widget_id="servers", expected_version=0)
     assert out["ok"] is False and out["error"] == "conflict" and out["current_version"] == 1
-    assert len(out["layout"]["widgets"]) == 5
+    assert len(out["layout"]["widgets"]) == 4
     assert tool(plugin, store, operation="remove_widget", widget_id="servers", expected_version=1)["ok"]
 
 
@@ -324,7 +340,7 @@ def test_tool_with_a_stale_expected_version_gets_the_current_layout(plugin, lay,
 
 def test_routes_put_and_preset_use_compare_and_set(plugin, store):
     status, body = plugin.api_layout_get(store)
-    assert status == 200 and body["layout"]["version"] == 0 and len(body["widget_types"]) == 10
+    assert status == 200 and body["layout"]["version"] == 0 and len(body["widget_types"]) == 7
     layout = body["layout"]
     layout["widgets"] = layout["widgets"][:2]
     status, body = plugin.api_layout_put(store, {"expected_version": 0, "layout": layout})
@@ -335,8 +351,8 @@ def test_routes_put_and_preset_use_compare_and_set(plugin, store):
     assert status == 400 and "expected_version" in body["message"]
     status, body = plugin.api_layout_put(store, {"expected_version": 1, "layout": {"widgets": [{"type": "x"}]}})
     assert status == 400 and "unknown widget type" in body["message"]
-    status, body = plugin.api_layout_preset(store, {"preset": "server_watch", "expected_version": 1})
-    assert status == 200 and body["layout"]["preset"] == "server_watch" and body["layout"]["version"] == 2
+    status, body = plugin.api_layout_preset(store, {"preset": "deploy_desk", "expected_version": 1})
+    assert status == 200 and body["layout"]["preset"] == "deploy_desk" and body["layout"]["version"] == 2
     status, body = plugin.api_layout_preset(store, {"preset": "nope"})
     assert status == 400
 
@@ -350,7 +366,7 @@ def test_route_availability_joins_the_setup_feature_lists(plugin, store, kit):
     rows = {r["id"]: r for r in body["availability"]}
     assert rows["servers"]["available"] is False
     assert rows["servers"]["reason"] == "No server data (scoped tokens cannot read servers)"
-    assert rows["deployments"]["available"] is True and rows["resources"]["available"] is True
+    assert rows["deployments"]["available"] is True and rows["apps"]["available"] is True
     for method, url, body, _ in fake.requests:  # reads, the made-up-UUID probes and MCP initialize only
         assert method == "GET" or "hermes-permission-probe-does-not-exist" in url \
             or (url.endswith("/mcp") and body.get("method") == "initialize"), (method, url)

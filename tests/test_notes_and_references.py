@@ -354,7 +354,7 @@ def test_overview_reference(m, tmp_path):
     text = expand(m, "overview", tmp_path)
     assert text.startswith("[Coolify Cockpit, live state for @coolify:overview as of ")
     assert "not instructions" in text.splitlines()[0]
-    assert "Recent failed deployments" in text and "shop-web-staging" in text
+    assert "NEEDS YOU" in text and "LATEST DEPLOYS" in text and "shop-web-staging" in text
     assert len(text) <= m.references.MAX_REFERENCE_CHARS
 
 

@@ -5,7 +5,7 @@
                                           one check shared by every caller for 2 minutes
     GET /snapshot[?refresh=true]          the Snapshot (servers, resources, deployments), 10 s cache
     GET /resources/{uuid}/deployments     deployment history of one application (?take=N, max 50)
-    GET /actions                          the ActionSpec registry and whether the action token holds deploy
+    GET /actions                          the ActionSpec registry and whether the API token holds deploy
     POST /actions                         {kind, target, params?, dry_run?}: one lifecycle action
     GET /layout[?availability=true]       the cockpit layout, widget types and presets (+ per-widget availability)
     PUT /layout                           {expected_version, layout}: save the pane's layout (compare-and-set)
@@ -13,12 +13,13 @@
     GET /notes[?max_chars=N]              the instance notebook COOLIFY.md (newest entries kept)
     POST /notes                           {text, topic?}: append one dated entry as "you"
     POST /diagnose                        {log_text?, deployment_uuid?}: a diagnosis card for the widget
+    GET /alerts                           the alert job: on or off, cadence, delivery, last check (no Coolify request)
 
 The handlers are the plugin's own `api_*` functions; this file only adapts them to FastAPI. Hermes
 loads it as a standalone module, so the plugin folder is loaded here as a package by path. Settings
 come from the profile config (`plugins.entries.coolify-cockpit.settings`), secrets from Hermes'
 secret scope (`get_secret`). Every route but `POST /actions` only reads from Coolify; that one is
-the user's own click (the pane confirms it first) and runs with the action token only, after the
+the user's own click (the pane confirms it first) and runs with the API token only, after the
 same rights and view checks the agent's tool runs.
 Coolify's API rate limit (200 requests per minute per Coolify user by default) answers 429
 `{"error": "rate_limited", "retry_after_s": N}` on every route that reads Coolify.
@@ -113,6 +114,11 @@ def snapshot(refresh: bool = Query(False)) -> JSONResponse:
     return _reply(_plugin().api_snapshot(_get_setting, _get_secret, refresh=refresh))
 
 
+@router.get("/servers/metrics")
+def server_metrics(range: str = Query("1h")) -> JSONResponse:
+    return _reply(_plugin().api_server_metrics(_get_setting, _get_secret, range))
+
+
 @router.get("/resources/{uuid}/deployments")
 def resource_deployments(uuid: str, take: int = Query(10, ge=1, le=50)) -> JSONResponse:
     return _reply(_plugin().api_resource_deployments(_get_setting, _get_secret, uuid, take=take))
@@ -165,3 +171,8 @@ def notes_append(body: dict = Body(...)) -> JSONResponse:
 @router.post("/diagnose")
 def diagnose(body: dict = Body(...)) -> JSONResponse:
     return _reply(_plugin().api_diagnose(_get_setting, _get_secret, body))
+
+
+@router.get("/alerts")
+def alerts() -> JSONResponse:
+    return _reply(_plugin().api_alerts())

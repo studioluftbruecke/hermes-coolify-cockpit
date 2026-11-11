@@ -1,6 +1,6 @@
 name: coolify-cockpit
-version: "0.0.11"
-description: "Coolify Cockpit: operate your Coolify instance from Hermes. Detects what your API tokens may do (rights, scope, what they see) and tells you which cockpit features your token setup unlocks, which it does not and why. Reads one snapshot of servers (load), resources and deployments (running, recently failed) and the deployment history of any application, diagnoses a failed deployment from its log against a catalogue of common self-hosting failures, and runs lifecycle actions (deploy, force rebuild, restart, start, stop, cancel, rollback) with the action token only: each agent-initiated action asks for your approval in Hermes and is refused in unattended runs. The cockpit layout (widgets, three presets) is data the agent can rearrange on request with coolify_cockpit, which edits only the layout and never acts on Coolify. Says whether a Coolify update is out. Keeps COOLIFY.md, a notebook about your instance that you, the agent and the cockpit write (it notes version, server and token-rights changes by itself). Ships a skill for the agent, @coolify: context references for live state in one token, and registers its secret formats with Hermes' redaction. The Desktop half adds a Cockpit page (widgets for all of this, action buttons behind a confirm dialog, edit mode, a cockpit chat that drafts into a normal Hermes session), a status-bar chip and a palette command; it ships switched off."
+version: "0.1.0"
+description: "Coolify Cockpit: see what needs you across your Coolify instance, deploy with your approval, and let Hermes explain failed deploys."
 author: "Studio Luftbrücke"
 license: MIT
 requires_hermes: ">=0.23.0"
@@ -23,20 +23,49 @@ config_schema:
   COOLIFY_COCKPIT_TOKEN:
     type: secret
     env: COOLIFY_COCKPIT_TOKEN
-    label: "Action token (or your only token)"
-    description: "A Coolify API token. Recommended: read + deploy, scoped to the environments the cockpit may act on. Any token works; the cockpit tells you what it unlocks. Actions use only this token."
-  COOLIFY_COCKPIT_READ_TOKEN:
-    type: secret
-    env: COOLIFY_COCKPIT_READ_TOKEN
-    label: "Overview token (optional)"
-    description: "A team-wide read-only Coolify token for server stats and the full resource list. Scoped tokens cannot read servers. Never used for actions."
-  check_updates:
+    label: "API token"
+    description: "Coolify: Keys & Tokens, API tokens. Recommended: read and deploy, all projects."
+  protected_environments:
+    type: string
+    default: "production"
+    label: "Protected environments"
+    description: "Comma-separated. The agent may not act here unless the next switch is on; your own clicks always work."
+  agent_on_protected:
     type: boolean
-    default: true
-    label: "Check for Coolify updates"
-    description: "Compare your instance's version with the latest release Coolify publishes at cdn.coollabs.io."
+    default: false
+    label: "Agent may act on protected environments"
+    description: "Off: the agent is refused there. On: each action still asks you, naming the environment."
   agent_actions:
     type: boolean
     default: true
     label: "Let the agent run actions"
-    description: "When on, the agent may deploy, restart, start, stop, cancel or roll back with the action token; every call asks for your approval in Hermes and is refused in cron jobs, webhooks and single-query runs. When off, only your own clicks in the cockpit run actions."
+    description: "Each agent action asks you first. Refused in cron jobs, webhooks and one-shot runs."
+  disk_warn_percent:
+    type: integer
+    default: 85
+    label: "Disk warning at (%)"
+    description: "A server at or over this disk use needs attention."
+  memory_warn_percent:
+    type: integer
+    default: 90
+    label: "Memory warning at (%)"
+    description: "A server at or over this memory use needs attention."
+  check_updates:
+    type: boolean
+    default: true
+    label: "Check for Coolify updates"
+    description: "Compares your version with Coolify's release feed at cdn.coollabs.io."
+  COOLIFY_COCKPIT_READ_TOKEN:
+    type: secret
+    env: COOLIFY_COCKPIT_READ_TOKEN
+    label: "Read-only token (optional)"
+    description: "Only if your API token is limited to some projects: a team-wide read token shows servers and every app. Never acts."
+  COOLIFY_COCKPIT_GIT_TOKEN:
+    type: secret
+    env: COOLIFY_COCKPIT_GIT_TOKEN
+    label: "Git host token (optional)"
+    description: "Read-only, for private repos without Forgebrücke: shows when a branch is ahead of what runs."
+  git_host:
+    type: string
+    label: "Git host of that token (optional)"
+    description: "Where the git host token is sent, e.g. git.example.com. Leave empty for a GitHub token."

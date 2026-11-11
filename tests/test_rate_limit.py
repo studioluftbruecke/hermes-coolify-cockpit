@@ -284,7 +284,7 @@ def test_the_dry_run_takes_environment_names_from_the_stored_snapshot(host):
     asked = [f"{m} {p}" for m, p, _ in fake.requests[before:]]
     assert status == 200 and plan["target"]["project"] == "shop" and plan["target"]["environment"] == "staging"
     assert not any(a.startswith("GET /projects") for a in asked)
-    assert asked.count("GET /applications") == 1  # the action token's own list still decides the view
+    assert asked.count("GET /applications") == 1  # the API token's own list still decides the view
 
 
 def test_a_resource_outside_the_view_is_still_refused_with_a_cached_view(host):

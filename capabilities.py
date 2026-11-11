@@ -42,14 +42,19 @@ class Ability(str, Enum):
 
 
 class Role(str, Enum):
-    ACTION = "action"      # COOLIFY_COCKPIT_TOKEN when a read token is also set
-    OVERVIEW = "overview"  # COOLIFY_COCKPIT_READ_TOKEN when an action token is also set
-    SINGLE = "single"      # the only token set, in either field
+    ACTION = "api"          # COOLIFY_COCKPIT_TOKEN when a read-only token is also set
+    OVERVIEW = "read_only"  # COOLIFY_COCKPIT_READ_TOKEN when an API token is also set
+    SINGLE = "single"       # the only token set, in either field
+
+    @property
+    def word(self) -> str:
+        """How every text names this token: "API token", "read-only token", or just "token"."""
+        return {"api": "API token", "read_only": "read-only token"}.get(self.value, "token")
 
 
 class Lane(str, Enum):
     READ = "read"      # any token; the one with the widest view answers
-    ACTION = "action"  # only the action or single token, never the overview token
+    ACTION = "action"  # only the API token (or the only token), never the read-only token
 
 
 class TokenStatus(str, Enum):
@@ -102,7 +107,7 @@ READ_SETTING = "COOLIFY_COCKPIT_READ_TOKEN"
 
 def connection_from_settings(url: Optional[str], action_token: Optional[str],
                              read_token: Optional[str]) -> Connection:
-    """Any combination of one or two tokens is a valid setup; a lone token is the single token."""
+    """Any combination of one or two tokens is a valid setup; a lone token is the only token."""
     if not (url or "").strip():
         raise ConfigError(f"No Coolify URL set. Set {URL_SETTING} in the plugin settings "
                           "(the address you open Coolify at, e.g. https://coolify.example.com).")
@@ -117,8 +122,8 @@ def connection_from_settings(url: Optional[str], action_token: Optional[str],
                           f"plugin settings; optionally a team-wide read-only token as {READ_SETTING}.")
     if action and read and action == read:
         return Connection(base, (TokenSlot(Role.SINGLE, action, ACTION_SETTING),),
-                          (f"{ACTION_SETTING} and {READ_SETTING} hold the same token; it is used as a "
-                           "single token.",))
+                          (f"{ACTION_SETTING} and {READ_SETTING} hold the same token; it is used as the "
+                           "only token.",))
     if action and read:
         return Connection(base, (TokenSlot(Role.ACTION, action, ACTION_SETTING),
                                  TokenSlot(Role.OVERVIEW, read, READ_SETTING)))
@@ -181,7 +186,7 @@ class TokenInfo:
 
     @property
     def label(self) -> str:
-        return f"{self.role.value} token ({self.setting}, sha256 {self.fingerprint})"
+        return f"{self.role.word} ({self.setting}, sha256 {self.fingerprint})"
 
 
 @dataclass
@@ -250,7 +255,7 @@ class Capabilities:
 
 # --- the FeatureRule registry ------------------------------------------------------------------
 
-OVERVIEW_HINT = (f"add a team-wide read-only token as the overview token ({READ_SETTING}), or use a "
+OVERVIEW_HINT = (f"add a team-wide read-only token ({READ_SETTING}), or use a "
                  "token without a scope")
 
 FEATURE_RULES: tuple[FeatureRule, ...] = (
@@ -285,8 +290,7 @@ FEATURE_RULES: tuple[FeatureRule, ...] = (
         "actions", "Deploy, restart, start, stop, cancel, rollback", "F6",
         Needs(abilities=(Ability.DEPLOY,), lane=Lane.ACTION),
         "No actions (the {action_token} lacks `deploy`)",
-        "give the {action_token} the `deploy` right, scoped to the environments it may touch, or "
-        f"store a token that has it as {ACTION_SETTING}"),
+        f"give the {{action_token}} the `deploy` right, or store a token that has it as {ACTION_SETTING}"),
     FeatureRule(
         "live_logs", "Live deployment logs (diagnosis without pasting)", "F8",
         Needs(abilities=(Ability.READ_SENSITIVE,)),
@@ -477,7 +481,7 @@ def route_servers(tokens: list[TokenInfo]) -> Optional[TokenInfo]:
 
 
 def route_actions(tokens: list[TokenInfo]) -> Optional[TokenInfo]:
-    """Actions go only to the action or single token, never to the overview token."""
+    """Actions go only to the API token (or the only token), never to the read-only token."""
     return next((t for t in tokens if t.role in (Role.ACTION, Role.SINGLE) and t.ok), None)
 
 
@@ -500,9 +504,9 @@ def evaluate(rule: FeatureRule, tokens: list[TokenInfo], facts: InstanceFacts) -
     def missing(reason: str, unlock: str) -> Feature:
         return Feature(rule.id, rule.label, False, reason, unlock)
 
-    # Rule texts name the token the user would change: "the action token" or "the single token".
+    # Rule texts name the token the user would change: "the API token" or "the token".
     action = route_actions(tokens) or next((t for t in tokens if t.role is not Role.OVERVIEW), None)
-    words = {"action_token": f"{action.role.value if action else Role.ACTION.value} token",
+    words = {"action_token": "API token" if action is None or action.role is Role.SINGLE else action.role.word,
              "visible_projects": max((len(t.sees.projects) for t in tokens if t.ok), default=0)}
 
     if not facts.reachable:
@@ -515,7 +519,7 @@ def evaluate(rule: FeatureRule, tokens: list[TokenInfo], facts: InstanceFacts) -
         rejected = [t for t in tokens if t.status is TokenStatus.UNAUTHORIZED
                     and (needs.lane is Lane.READ or t.role is not Role.OVERVIEW)]
         if rejected:
-            return missing(f"The {rejected[0].role.value} token was rejected (401 Unauthenticated)",
+            return missing(f"The {rejected[0].role.word} was rejected (401 Unauthenticated)",
                            f"store a valid token in {rejected[0].setting}; Coolify shows a token "
                            "only once, so create a new one if it was lost")
         return missing(rule.reason_if_missing.format(**words), rule.unlock_hint.format(**words))
@@ -525,7 +529,7 @@ def evaluate(rule: FeatureRule, tokens: list[TokenInfo], facts: InstanceFacts) -
         reason = rule.reason_if_missing.format(**words)
         if needs.lane is Lane.ACTION and any(t.role is Role.OVERVIEW and all(t.holds(a) for a in needs.abilities)
                                              for t in tokens):
-            reason += "; the overview token holds it, but actions never use the overview token"
+            reason += "; the read-only token holds it, but actions never use the read-only token"
         return missing(reason, rule.unlock_hint.format(**words))
     if needs.unscoped:
         holders = [t for t in holders if t.scoped is False]
@@ -533,7 +537,7 @@ def evaluate(rule: FeatureRule, tokens: list[TokenInfo], facts: InstanceFacts) -
             reason = rule.reason_if_scoped.format(**words)
             rejected = [t for t in tokens if t.status is TokenStatus.UNAUTHORIZED]
             if rejected:
-                reason += f"; the {rejected[0].role.value} token was rejected (401 Unauthenticated)"
+                reason += f"; the {rejected[0].role.word} was rejected (401 Unauthenticated)"
             return missing(reason, rule.unlock_if_scoped.format(**words))
     if needs.mcp and facts.mcp_enabled is not True:
         return missing("Coolify's MCP server is off or did not answer",
@@ -560,25 +564,26 @@ def setup_warnings(tokens: list[TokenInfo], facts: InstanceFacts, notes: tuple[s
             continue
         held = {a for a, v in token.abilities.items() if v}
         if token.role is not Role.OVERVIEW and Ability.DEPLOY in held and token.scoped is False:
-            warnings.append(f"The {token.role.value} token can deploy, restart and stop every resource of "
-                            "the team, production included. Recommended: scope it to the environments "
-                            "the agent may touch.")
+            # A1 recommends exactly this token; the warning says what guards it instead (A8).
+            warnings.append(f"The {token.role.word} can deploy, restart and stop every resource of "
+                            "the team, production included. The agent stays off the protected "
+                            "environments unless you allow it in the settings.")
         if held & {Ability.WRITE, Ability.DELETE}:
             rights = " and ".join(a.value for a in (Ability.WRITE, Ability.DELETE) if a in held)
-            warnings.append(f"The {token.role.value} token holds {rights}: it can change or delete "
+            warnings.append(f"The {token.role.word} holds {rights}: it can change or delete "
                             "resources. The cockpit does not use these rights, but anything that holds "
                             "the token can.")
         if Ability.READ_SENSITIVE in held:
             where = "for the whole team" if token.scoped is False else "inside its scope"
-            warnings.append(f"The {token.role.value} token holds read:sensitive: logs and environment "
+            warnings.append(f"The {token.role.word} holds read:sensitive: logs and environment "
                             f"values are readable {where}, so they can reach the model (the cockpit "
                             "redacts known secret patterns; still disclosed).")
         if token.role is Role.OVERVIEW and held - {Ability.READ}:
             extra = ", ".join(a.value for a in Ability if a in held and a is not Ability.READ)
-            warnings.append(f"The overview token also holds {extra}. The cockpit uses it only for reads; "
+            warnings.append(f"The read-only token also holds {extra}. The cockpit uses it only for reads; "
                             "a read-only token is enough.")
         if any(v is None for v in token.abilities.values()):
-            warnings.append(f"Some rights of the {token.role.value} token could not be determined "
+            warnings.append(f"Some rights of the {token.role.word} could not be determined "
                             f"({'; '.join(token.notes)}).")
     if facts.coolify_version and _version_key(facts.coolify_version) < MIN_SCOPED_VERSION:
         warnings.append(f"Coolify {facts.coolify_version} is older than 4.6.0; scoped tokens and some "
@@ -674,12 +679,14 @@ def to_model_dict(caps: Capabilities, *, show_projects: bool = True) -> dict[str
         })
     else:
         instance["error"] = facts.unreachable_reason
+    tokens = [_token_summary(t, show_projects) for t in caps.tokens]
     return {
         "ok": True,
+        "setup": result_line({"instance": instance, "tokens": tokens}),
         "instance": instance,
-        "tokens": [_token_summary(t, show_projects) for t in caps.tokens],
+        "tokens": tokens,
         "routing": caps.routing,
-        "available": [f"{f.id}: {f.label}" + (f" (via {f.via.value} token)" if f.via else "")
+        "available": [f"{f.id}: {f.label}" + (f" (via the {f.via.word})" if f.via else "")
                       for f in caps.available],
         "not_available": [{"feature": f"{f.id}: {f.label}", "reason": f.reason, "unlock": f.unlock}
                           for f in caps.not_available],
@@ -821,3 +828,60 @@ def cached_version_status(client: CoolifyClient, *, check_updates: bool, path: O
             data["update_available"] = _version_key(data["latest_version"]) > _version_key(data["coolify_version"])
     _write_version_file(path, data)
     return {k: data.get(k) for k in ("coolify_version", "latest_version", "update_available", "update_check")}
+
+
+# --- 0.1.0 M3: the setup's result line ------------------------------------------------------------
+#
+# After a token is saved, one line replaces the setup explanation (PLAN-v0.1 -> Tokens and setup):
+#   "Team-wide · read, deploy · 28 apps · 2 servers"
+#   "Limited to 5 projects · read, deploy · no servers"   + the button "Add a read-only token"
+# A token holding write or delete adds one amber chip "can change and delete"; the cockpit never
+# calls those rights. Built from the model dict `to_model_dict` returns, so the page, the settings
+# page and the tests read one function.
+
+WARN_CHIP = "can change and delete"
+SHOWN_RIGHTS = ("read", "deploy", "read:sensitive")
+
+
+def _plural(n: Any, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def result_line(model: Mapping[str, Any]) -> dict[str, Any]:
+    tokens = list(model.get("tokens") or [])
+    main = next((t for t in tokens if t.get("role") in (Role.ACTION.value, Role.SINGLE.value)), None)
+    read = next((t for t in tokens if t.get("role") == Role.OVERVIEW.value), None)
+    instance = model.get("instance") or {}
+    out: dict[str, Any] = {"line": "", "tone": "good", "limited": False, "add_read_token": False,
+                           "rights": [], "chip": None, "chip_detail": None}
+    if not instance.get("reachable", True):
+        return {**out, "line": "Coolify did not answer · check the URL", "tone": "bad"}
+    if main is None:
+        main = read
+    if main is None:
+        return {**out, "line": "No token set", "tone": "bad"}
+    if main.get("status") != "ok":
+        word = "Rejected by Coolify (401)" if main.get("status") == "unauthorized" else "Token check failed"
+        return {**out, "line": f"{word} · check the token", "tone": "bad"}
+    rights = [r for r in SHOWN_RIGHTS if r in (main.get("rights") or [])]
+    sees = main.get("sees") or {}
+    limited = main.get("scope") == "scoped"
+    if limited:
+        head = f"Limited to {_plural(sees.get('projects') or 0, 'project')}"
+        servers = "no servers"
+    else:
+        head = "Team-wide" if main.get("scope") == "team-wide" else "Scope unknown"
+        servers = _plural(sees["servers"], "server") if isinstance(sees.get("servers"), int) else "no servers"
+    parts = [head, ", ".join(rights) or "no rights", _plural(sees.get("applications") or 0, "app"), servers]
+    if limited and read is not None and read.get("status") == "ok" and read.get("scope") == "team-wide":
+        parts[-1] = "read-only token adds servers"
+    out.update(line=" · ".join(parts), limited=limited, rights=rights,
+               add_read_token=limited and read is None,
+               tone="warn" if "deploy" not in rights or limited else "good")
+    held = set(main.get("rights") or [])
+    if held & {"write", "delete"}:
+        both = " and ".join(r for r in ("write", "delete") if r in held)
+        out["chip"] = WARN_CHIP
+        out["chip_detail"] = (f"This token holds {both}. The cockpit never uses them, but anything that holds the "
+                              "token can.")
+    return out

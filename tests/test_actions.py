@@ -43,7 +43,7 @@ DEPLOYMENTS = {
 
 # token -> (scoped, holds deploy)
 TOKENS = {
-    "tok-act": (True, True),          # recommended action token: scoped read + deploy
+    "tok-act": (True, True),          # a scoped API token: read + deploy
     "tok-act-nodeploy": (True, False),  # scoped read only
     "tok-read": (False, False),       # overview: team-wide read
     "tok-read-deploy": (False, True),  # overview that also holds deploy
@@ -192,7 +192,7 @@ def test_each_spec_sends_exactly_its_request_with_the_action_token(pkg, kind, ta
     assert status == 200 and body["ok"] and body["sent"], body
     sent = fake.actions_sent()
     assert [(m, p, q, b) for m, p, q, b, _ in sent] == [("POST",) + expected]
-    assert {t for *_, t in fake.requests} == {"tok-act"}, "the overview token is never used on the action lane"
+    assert {t for *_, t in fake.requests} == {"tok-act"}, "the read-only token is never used on the action lane"
 
 
 def test_deployment_uuid_comes_back_where_coolify_creates_one(pkg):
@@ -235,7 +235,7 @@ def test_dry_run_plans_without_sending_and_names_the_target(pkg):
     assert status == 200 and body["dry_run"] and not body["sent"]
     assert body["confirm_text"] == ("restart application 'shop-web-staging' (project shop, environment staging, "
                                     "server app-1)")
-    assert body["token"]["role"] == "action" and "tok-act" not in json.dumps(body)
+    assert body["token"]["role"] == "api" and "tok-act" not in json.dumps(body)
     assert fake.actions_sent() == []
 
 
@@ -258,8 +258,8 @@ def test_refused_without_the_deploy_right(pkg):
 def test_overview_token_is_never_used_for_actions_even_when_it_holds_deploy(pkg):
     _, body, fake = _refused(pkg, {"kind": "restart", "target": "app-stg"}, "no_deploy_right",
                              action="tok-act-nodeploy", read="tok-read-deploy")
-    assert "never use the overview token" in body["message"]
-    assert [r for r in fake.requests if r[4] == "tok-read-deploy"] == [], "the overview token got a request"
+    assert "never use the read-only token" in body["message"]
+    assert [r for r in fake.requests if r[4] == "tok-read-deploy"] == [], "the read-only token got a request"
 
 
 @pytest.mark.parametrize("target", ["shop-web", "app-prod"])
@@ -297,16 +297,17 @@ class Hermes:
     human (here: `answer`), and call the handler only when approved (tools/approval.py,
     hermes_cli/plugins.py `_resolve_block_from_details`)."""
 
-    def __init__(self, pkg, run, fake, *, answer=True, action="tok-act", read="tok-read"):
+    def __init__(self, pkg, run, fake, *, answer=True, action="tok-act", read="tok-read", get_setting=None):
         self.tickets = pkg.ApprovalTickets()
-        self.gate = pkg.make_action_gate(settings(), secrets(action, read), lambda: run, self.tickets,
+        self.settings = get_setting or settings()
+        self.gate = pkg.make_action_gate(self.settings, secrets(action, read), lambda: run, self.tickets,
                                          transport=fake)
         self.pkg, self.run, self.fake, self.answer = pkg, run, fake, answer
         self.secrets = secrets(action, read)
         self.asked = []
 
     def handler(self, args, session_id="s1"):
-        return json.loads(json.dumps(self.pkg.run_approved_action(settings(), self.secrets, args, session_id,
+        return json.loads(json.dumps(self.pkg.run_approved_action(self.settings, self.secrets, args, session_id,
                                                                   self.run, self.tickets, transport=self.fake)))
 
     def call(self, args, session_id="s1"):
@@ -500,3 +501,48 @@ def test_in_process_cli_still_asks(pkg, monkeypatch):
 def test_an_action_never_resolves_part_of_a_name(pkg):
     _, body, _ = _refused(pkg, {"kind": "restart", "target": "shop-web-stag"}, "outside_action_view")
     assert "shop-web-staging" in body["message"], "it suggests the exact name instead"
+
+
+# --- 0.1.0 M3: protected environments (A8, T4) ------------------------------------------------------
+
+def test_agent_is_refused_on_production_by_default_and_his_click_still_works(pkg):
+    fake = Instance()
+    hermes = Hermes(pkg, attended(), fake, action="tok-full", read=None)
+    result = hermes.call({"kind": "restart", "target": "shop-web"})
+    assert "production is a protected environment" in result["blocked"] and hermes.asked == []
+    assert fake.actions_sent() == []
+    # the handler alone (a hook that let it through) refuses too
+    assert hermes.handler({"kind": "restart", "target": "shop-web"})["error"] in ("protected", "not_approved")
+    status, body = pkg.api_action(settings(), secrets("tok-full", None), {"kind": "restart", "target": "shop-web"},
+                                  transport=fake)
+    assert status == 200 and body["sent"]  # the cockpit's own button is never refused here
+
+
+def test_switch_on_asks_each_time_with_a_one_time_key_naming_the_environment(pkg):
+    fake = Instance()
+    on = settings(agent_on_protected=True)
+    hermes = Hermes(pkg, attended(), fake, action="tok-full", read=None, get_setting=on)
+    first = hermes.call({"kind": "restart", "target": "shop-web"})
+    second = hermes.call({"kind": "restart", "target": "shop-web"})
+    assert first["ok"] and second["ok"] and len(fake.actions_sent()) == 2
+    keys = [a["rule_key"] for a in hermes.asked]
+    assert len(keys) == 2 and keys[0] != keys[1]  # "for this session" and "always" never carry over
+    assert all(k.startswith("coolify_action:restart:app-prod:protected:") for k in keys)
+    assert hermes.asked[0]["message"].startswith("PROTECTED ENVIRONMENT PRODUCTION.")
+
+
+def test_staging_marked_protected_is_refused_and_unprotected_production_is_asked_normally(pkg):
+    fake = Instance()
+    marked = settings(protected_environments="staging, Production")
+    hermes = Hermes(pkg, attended(), fake, get_setting=marked)
+    assert "staging is a protected environment" in hermes.call({"kind": "restart", "target": "app-stg"})["blocked"]
+    free = settings(protected_environments="")
+    hermes = Hermes(pkg, attended(), fake, action="tok-full", read=None, get_setting=free)
+    assert hermes.call({"kind": "restart", "target": "shop-web"})["ok"]
+    assert hermes.asked[0]["rule_key"] == "coolify_action:restart:app-prod"
+
+
+def test_unknown_environment_counts_as_protected(pkg):
+    assert pkg.is_protected(settings(), None) and pkg.is_protected(settings(), "")
+    assert pkg.is_protected(settings(), "PRODUCTION") and not pkg.is_protected(settings(), "staging")
+    assert pkg.protected_environments(settings(protected_environments=None)) == ["production"]

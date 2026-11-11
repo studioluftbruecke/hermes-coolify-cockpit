@@ -2,7 +2,7 @@
 
 A Snapshot answers "what is going on?" in one read. It follows the M1 routing rule: every call
 goes to the token with the widest view (team-wide before scoped; among equals the one that sees
-more applications; the overview token before the action token). Nothing here writes: REST calls are
+more applications; the read-only token before the API token). Nothing here writes: REST calls are
 GETs, and MCP calls are `tools/call` of the read tools in `READ_MCP_TOOLS` only.
 
 Calls for a cold snapshot (one team-wide reader, P servers with metrics on, J projects):
@@ -11,7 +11,7 @@ Calls for a cold snapshot (one team-wide reader, P servers with metrics on, J pr
     GET /applications, /services, /databases, /deployments (the running queue), /projects
     GET /projects/{uuid} per project (environment names; resources carry only an environment id)
     MCP get_server_metrics per server with Sentinel metrics on
-    MCP list_deployments status=failed (the team's newest failures in one call)
+    MCP list_deployments status=finished and status=failed (the team's newest 100 of each)
 
 All of them run in parallel. A rebuild that follows an expired snapshot starts the metrics calls
 before the scope check, with the token that read last time, reuses server metrics younger
@@ -19,7 +19,13 @@ than 60 s and the environment names younger than ENVIRONMENTS_TTL_S (`ReadHint`)
 never change meaning, so the names are read again only when that time is up or a resource points
 at an id the map does not hold (a new environment). On Konstantin's instance (23 projects) that
 takes a rebuild from 30 rate-limited REST calls to 6. Per-application deployment history is not
-part of the snapshot; it is fetched on demand for one resource (`deployment_history`).
+part of the snapshot; it is fetched on demand for one resource (`deployment_history`), except for an
+application at the window edge of the two lists (`fleet.needs_history`, at most EDGE_READS per build,
+kept until that application deploys again).
+
+0.1.0: the two lists give every application's `FleetRow` (`fleet.py`: failing, deploying, last good)
+and the newest deployments of every environment (`latest_deployments`, successes included). The
+`Attention` list is built on top by `fleet.attention` when the snapshot is served.
 
 Coolify's API rate limit (`coolify_client`) counts REST calls only, per Coolify user. A build that
 met a 429 anywhere raises `rate_limited` and is not cached: its swallowed reads would show as
@@ -46,16 +52,23 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 try:
+    from . import fleet as fleet_mod
     from .capabilities import (OVERVIEW_HINT, Connection, Role, TokenSlot)
     from .coolify_client import (CoolifyClient, CoolifyError, ErrorKind, HttpResponse, LimitWatch,
                                  Transport, fingerprint, urllib_transport)
 except ImportError:  # loaded as a top-level module (tests, scripts)
+    import fleet as fleet_mod  # type: ignore
     from capabilities import OVERVIEW_HINT, Connection, Role, TokenSlot  # type: ignore
     from coolify_client import (CoolifyClient, CoolifyError, ErrorKind, HttpResponse,  # type: ignore
                                 LimitWatch, Transport, fingerprint, urllib_transport)
 
 CACHE_TTL_S = 10.0
-FAILED_LIMIT = 20
+LIST_ROWS = 100       # rows per MCP list_deployments call (Coolify's page maximum)
+LATEST_KEEP = 40      # latest_deployments kept in the snapshot
+EDGE_READS = 5        # REST history reads per build for applications at the window edge
+GOOD_TAKE = 20        # M5: history rows read to find a failing app's last good deploy (Roll back)
+FALLBACK_READS = 10   # without MCP: REST history reads per build, each app at most every FALLBACK_TTL_S
+FALLBACK_TTL_S = 300.0
 HISTORY_DEFAULT = 10
 HISTORY_MAX = 50
 METRICS_MINUTES = 60
@@ -81,6 +94,10 @@ class Deployment:
     finished_at: Optional[str]
     server_name: Optional[str]
     url: Optional[str]
+    trigger: Optional[str] = None       # webhook | api | mcp | manual
+    project: Optional[str] = None
+    environment: Optional[str] = None
+    superseded: bool = False            # a failure a later success of the same app replaced
 
 
 @dataclass
@@ -104,13 +121,15 @@ class Resource:
     status: Optional[str]
     fqdn: Optional[str] = None
     last_deployment: Optional[dict] = None  # not filled in the snapshot; see deployment_history
+    git_repository: Optional[str] = None    # applications: as Coolify stores it (ssh, https or owner/repo)
+    git_branch: Optional[str] = None
 
 
 @dataclass
 class Snapshot:
     servers: list[ServerState]
     resources: list[Resource]
-    deployments: dict[str, Optional[list[Deployment]]]  # running, recent_failed (None: unknown)
+    deployments: dict[str, Optional[list[Deployment]]]  # running
     taken_at: str
     source: dict[str, Any]       # which token read: role, setting, fingerprint, scoped
     limits: list[str] = field(default_factory=list)   # what this setup cannot show, and why
@@ -118,6 +137,9 @@ class Snapshot:
     stats: dict[str, Any] = field(default_factory=dict)
     environments: dict[str, list] = field(default_factory=dict)  # environment id -> [project, environment]
     environments_epoch: Optional[float] = None                   # when those names were read
+    latest_deployments: Optional[list[Deployment]] = None        # every environment, newest first; None: unknown
+    fleet: dict[str, dict] = field(default_factory=dict)         # application uuid -> FleetRow
+    histories: dict[str, dict] = field(default_factory=dict)     # app uuid -> {key, epoch, rows}: REST reads kept
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -229,6 +251,7 @@ def to_deployment(row: dict, base_url: str, uuid_by_name: dict[str, str]) -> Dep
         finished_at=_str(row.get("finished_at")),
         server_name=_str(row.get("server_name")),
         url=_deployment_url(base_url, row.get("deployment_url")),
+        trigger=fleet_mod.trigger_of(row),
     )
 
 
@@ -301,7 +324,7 @@ def _no_reader_message(views: list[_View]) -> str:
         what = {"unauthorized": "was rejected (401); store a valid token",
                 "no_read": "lacks the `read` right",
                 "unreachable": f"got no answer ({v.detail})"}.get(v.state, f"failed ({v.detail})")
-        parts.append(f"the {v.slot.role.value} token ({v.slot.setting}) {what}")
+        parts.append(f"the {v.slot.role.word} ({v.slot.setting}) {what}")
     return "No token can read the instance: " + "; ".join(parts) + "."
 
 
@@ -342,17 +365,21 @@ def _resources(rows_by_kind: dict[str, list], envs: dict[int, tuple[str, str]]) 
             if not isinstance(row, dict):
                 continue
             project, environment = envs.get(row.get("environment_id"), (None, None))
+            app = kind == "application"
             out.append(Resource(uuid=str(row.get("uuid", "")), kind=kind, name=str(row.get("name", "")),
                                 project=project, environment=environment, status=_str(row.get("status")),
-                                fqdn=_fqdn(kind, row)))
+                                fqdn=_fqdn(kind, row),
+                                git_repository=_str(row.get("git_repository")) if app else None,
+                                git_branch=_str(row.get("git_branch")) if app else None))
     out.sort(key=lambda r: ((r.project or "~").lower(), (r.environment or "").lower(), r.kind, r.name.lower()))
     return out
 
 
-def _metrics(client: CoolifyClient, server_uuid: str) -> tuple[Optional[dict], Optional[str]]:
+def _metrics(client: CoolifyClient, server_uuid: str, minutes: int = METRICS_MINUTES
+             ) -> tuple[Optional[dict], Optional[str]]:
     """(metrics, None) or (None, why not) for one server."""
     try:
-        data = mcp_tool(client, "get_server_metrics", {"server_uuid": server_uuid, "minutes": METRICS_MINUTES})
+        data = mcp_tool(client, "get_server_metrics", {"server_uuid": server_uuid, "minutes": int(minutes)})
     except CoolifyError as error:
         return None, f"metrics unavailable ({error.kind.value}: {error.message[:120]})"
     data = data.get("data", data) if isinstance(data, dict) else {}
@@ -382,6 +409,7 @@ class ReadHint:
     metrics: dict = field(default_factory=dict)  # server uuid -> metrics dict with fetched_epoch
     environments: dict = field(default_factory=dict)  # environment id (int) -> (project, environment)
     environments_epoch: Optional[float] = None
+    histories: dict = field(default_factory=dict)  # app uuid -> {key, epoch, rows}
 
 
 def hint_from(snapshot: Optional[dict]) -> Optional[ReadHint]:
@@ -394,8 +422,9 @@ def hint_from(snapshot: Optional[dict]) -> Optional[ReadHint]:
         if str(key).isdigit() and isinstance(pair, (list, tuple)) and len(pair) == 2:
             envs[int(key)] = (str(pair[0]), str(pair[1]))
     epoch = snapshot.get("environments_epoch")
+    histories = snapshot.get("histories") if isinstance(snapshot.get("histories"), dict) else {}
     return ReadHint(str(snapshot["source"].get("role")), tuple(str(s.get("uuid")) for s in servers), metrics,
-                    envs, float(epoch) if isinstance(epoch, (int, float)) else None)
+                    envs, float(epoch) if isinstance(epoch, (int, float)) else None, dict(histories))
 
 
 def fresh_environments(hint: Optional[ReadHint], now: Optional[float] = None) -> Optional[dict]:
@@ -435,24 +464,47 @@ class _Metrics:
         return self.start([uuid])._pending[uuid].result()
 
 
-def _reads(pool: ThreadPoolExecutor, client: CoolifyClient, failed_limit: int,
+def _reads(pool: ThreadPoolExecutor, client: CoolifyClient, list_rows: int,
            applications: Optional[list], read_environments: bool = True) -> dict[str, Any]:
     get = client.get
+    rows = max(1, min(100, list_rows))
     jobs: dict[str, Callable[[], Any]] = {
         "applications": (lambda: applications) if applications is not None else (lambda: get("/applications")),
         "services": lambda: get("/services"),
         "databases": lambda: get("/databases"),
         "running": lambda: get("/deployments"),
-        "failed": lambda: mcp_tool(client, "list_deployments",
-                                   {"status": "failed", "per_page": max(1, min(100, failed_limit))}),
+        "finished": lambda: mcp_tool(client, "list_deployments", {"status": "finished", "per_page": rows}),
+        "failed": lambda: mcp_tool(client, "list_deployments", {"status": "failed", "per_page": rows}),
     }
     if read_environments:
         jobs["environments"] = lambda: _environment_map(client)
     return {name: pool.submit(job) for name, job in jobs.items()}
 
 
+def _history_rows(client: CoolifyClient, uuids: list[str], failures: dict, take: int = 5
+                  ) -> dict[str, list[dict]]:
+    """REST history (newest `take`) for a few applications, in parallel. A failure is recorded under
+    `history:<uuid>`; a 429 is re-raised by the build's LimitWatch."""
+    if not uuids:
+        return {}
+
+    def one(uuid: str) -> tuple[str, Optional[list[dict]]]:
+        try:
+            payload = client.get(f"/deployments/applications/{uuid}", {"skip": 0, "take": take})
+        except CoolifyError as error:
+            failures[f"history:{uuid}"] = error
+            return uuid, None
+        rows = payload.get("deployments") if isinstance(payload, dict) else payload
+        keep = ("deployment_uuid", "status", "commit", "commit_message", "created_at", "finished_at",
+                "server_name", "is_webhook", "is_api", "is_mcp")
+        return uuid, [{k: r.get(k) for k in keep} for r in rows or [] if isinstance(r, dict)]
+
+    with ThreadPoolExecutor(max_workers=min(8, len(uuids))) as pool:
+        return {uuid: rows for uuid, rows in pool.map(one, uuids) if rows is not None}
+
+
 def build_snapshot(connection: Connection, *, transport: Transport = urllib_transport,
-                   timeout: float = 15.0, failed_limit: int = FAILED_LIMIT,
+                   timeout: float = 15.0, list_rows: int = LIST_ROWS,
                    hint: Optional[ReadHint] = None) -> Snapshot:
     watch = LimitWatch(transport)
     counter = CountingTransport(watch)
@@ -468,7 +520,7 @@ def build_snapshot(connection: Connection, *, transport: Transport = urllib_tran
         reader = choose_reader(views)
         if reader is None:
             raise SnapshotUnavailable(_no_reader_message(views))
-        futures = _reads(pool, reader.client, failed_limit, reader.applications, known_envs is None)
+        futures = _reads(pool, reader.client, list_rows, reader.applications, known_envs is None)
         metrics = early if early is not None and reader.slot is hinted_slot else _Metrics(pool, reader.client)
         servers: list[ServerState] = []
         for row in reader.servers or []:
@@ -511,7 +563,7 @@ def build_snapshot(connection: Connection, *, transport: Transport = urllib_tran
     elif reader.scoped is None:
         limits.append(f"No server data: GET /servers failed ({reader.detail})")
     for name, error in failures.items():
-        if name != "failed":
+        if name not in ("finished", "failed") and not name.startswith("history:"):
             errors.append(f"{name}: {error}")
     env_map = results.get("environments") or {}
     resources = _resources(rows, env_map)
@@ -524,22 +576,122 @@ def build_snapshot(connection: Connection, *, transport: Transport = urllib_tran
         d.resource_name = name_by_uuid.get(d.resource_uuid or "", d.resource_name)
         return d
 
-    running_rows = results.get("running") if isinstance(results.get("running"), list) else []
-    running = [current_name(to_deployment(r, connection.base_url, uuid_by_name))
-               for r in running_rows if isinstance(r, dict)]
-    recent_failed: Optional[list[Deployment]] = None
-    if "failed" in failures:
-        error = failures["failed"]
-        limits.append("Recent failed deployments need Coolify's MCP server (Coolify: Settings → Advanced → "
-                      f"API and MCP); it answered {error.kind.value}. Per-application history still works "
-                      "(coolify_deployments).")
+    running_rows = [r for r in (results.get("running") if isinstance(results.get("running"), list) else [])
+                    if isinstance(r, dict)]
+    for r in running_rows:  # the queue's rows may name the app only
+        if not r.get("application_uuid") and uuid_by_name.get(str(r.get("application_name"))):
+            r["application_uuid"] = uuid_by_name[str(r.get("application_name"))]
+    running = [current_name(to_deployment(r, connection.base_url, uuid_by_name)) for r in running_rows]
+
+    listed: dict[str, list[dict]] = {}
+    windows: dict[str, Any] = {}
+    for status in ("finished", "failed"):
+        if status in failures:
+            continue
+        payload = results.get(status)
+        rows_listed = [r for r in (payload.get("data") if isinstance(payload, dict) else None) or [] if isinstance(r, dict)]
+        listed[status] = rows_listed
+        windows[status] = fleet_mod.window_of(payload, rows_listed)
+    app_uuids = [r.uuid for r in resources if r.kind == "application"]
+    histories: dict[str, dict] = {}
+    history_reads = 0
+    latest: Optional[list[Deployment]] = None
+    fleet: dict[str, dict] = {}
+    known = dict(hint.histories) if hint is not None else {}
+    if len(listed) == 2:
+        rows_all = listed["finished"] + listed["failed"] + running_rows
+        by_app: dict[str, list[dict]] = {}
+        for r in rows_all:
+            if r.get("application_uuid"):
+                by_app.setdefault(str(r["application_uuid"]), []).append(r)
+        edge = [u for u in app_uuids
+                if fleet_mod.needs_history(by_app.get(u, []), windows["finished"], windows["failed"])]
+        for uuid in edge:  # kept until the app deploys again: the newest list row is the key
+            key = max((str(r.get("deployment_uuid") or r.get("uuid")) + "@" + str(r.get("created_at"))
+                       for r in by_app.get(uuid, [])), default="")
+            kept = known.get(uuid)
+            if isinstance(kept, dict) and kept.get("key") == key and isinstance(kept.get("rows"), list):
+                histories[uuid] = kept
+        to_read = [u for u in edge if u not in histories][:EDGE_READS]
+        read = _history_rows(reader.client, to_read, failures)
+        history_reads += len(to_read)
+        for uuid, rows_read in read.items():
+            key = max((str(r.get("deployment_uuid") or r.get("uuid")) + "@" + str(r.get("created_at"))
+                       for r in by_app.get(uuid, [])), default="")
+            histories[uuid] = {"key": key, "epoch": round(time.time(), 1), "rows": rows_read}
+        fleet = {u: row.to_dict() for u, row in fleet_mod.build_fleet(
+            app_uuids, rows_all, finished=windows["finished"], failed=windows["failed"],
+            histories={u: h["rows"] for u, h in histories.items() if u in edge}).items()}
+        for uuid in edge:
+            if uuid not in histories:
+                fleet[uuid]["state"] = "unknown"  # past the window and not read yet this build
+        # M5, Roll back to last good: a failing app whose last finished deploy is older than the
+        # finished list gets one history read (GOOD_TAKE rows), kept until it deploys again.
+        lost = [u for u, row in fleet.items() if row.get("state") == "failing" and not row.get("last_good")]
+        goods: dict[str, dict] = {}
+        for uuid in lost:
+            key = "good:" + max((str(r.get("deployment_uuid") or r.get("uuid")) + "@" + str(r.get("created_at"))
+                                 for r in by_app.get(uuid, [])), default="")
+            kept = known.get("good:" + uuid)
+            if isinstance(kept, dict) and kept.get("key") == key and isinstance(kept.get("rows"), list):
+                goods[uuid] = kept
+        to_read = [u for u in lost if u not in goods][:max(0, EDGE_READS - len(to_read))]
+        for uuid, rows_read in _history_rows(reader.client, to_read, failures, take=GOOD_TAKE).items():
+            key = "good:" + max((str(r.get("deployment_uuid") or r.get("uuid")) + "@" + str(r.get("created_at"))
+                                 for r in by_app.get(uuid, [])), default="")
+            goods[uuid] = {"key": key, "epoch": round(time.time(), 1), "rows": rows_read}
+        history_reads += len(to_read)
+        for uuid, kept in goods.items():
+            histories["good:" + uuid] = kept
+            done = sorted((r for r in kept["rows"] if r.get("status") == "finished"),
+                          key=lambda r: str(r.get("created_at") or ""), reverse=True)
+            if done:
+                fleet[uuid]["last_good"] = fleet_mod._short(done[0])
+        gone = fleet_mod.superseded(rows_all)
+        seen: set[str] = set()
+        latest = []
+        for r in sorted(rows_all, key=lambda x: str(x.get("created_at") or ""), reverse=True):
+            d = current_name(to_deployment(r, connection.base_url, uuid_by_name))
+            if not d.uuid or d.uuid in seen:
+                continue
+            seen.add(d.uuid)
+            d.superseded = d.uuid in gone
+            latest.append(d)
+            if len(latest) >= LATEST_KEEP:
+                break
     else:
-        payload = results.get("failed")
-        rows_failed = payload.get("data") if isinstance(payload, dict) else None
-        recent_failed = [current_name(to_deployment(r, connection.base_url, uuid_by_name))
-                         for r in rows_failed or [] if isinstance(r, dict)]
-        recent_failed.sort(key=lambda d: d.created_at or "", reverse=True)
-        recent_failed = recent_failed[:failed_limit]
+        # Without Coolify's MCP server: REST history per application on a slow cadence.
+        error = failures.get("finished") or failures.get("failed")
+        if error is not None and error.kind is ErrorKind.RATE_LIMITED:
+            raise error
+        limits.append("Failing apps and the latest deploys need Coolify's MCP server (Coolify: Settings, "
+                      f"Advanced, API and MCP); it answered {error.kind.value if error else '?'}. The cockpit "
+                      f"reads each app's history instead, every {int(FALLBACK_TTL_S // 60)} minutes.")
+        now = time.time()
+        for uuid in app_uuids:
+            kept = known.get(uuid)
+            if isinstance(kept, dict) and isinstance(kept.get("rows"), list) and \
+                    0 <= now - float(kept.get("epoch") or 0) <= FALLBACK_TTL_S:
+                histories[uuid] = kept
+        stale = sorted((u for u in app_uuids if u not in histories),
+                       key=lambda u: float((known.get(u) or {}).get("epoch") or 0))[:FALLBACK_READS]
+        history_reads += len(stale)
+        for uuid, rows_read in _history_rows(reader.client, stale, failures).items():
+            histories[uuid] = {"key": "rest", "epoch": round(now, 1), "rows": rows_read}
+        complete = fleet_mod.ListWindow(True)
+        for uuid in app_uuids:
+            if uuid in histories:
+                fleet[uuid] = fleet_mod.fleet_row(uuid, [dict(r, application_uuid=uuid) for r in histories[uuid]["rows"]]
+                                                  + [r for r in running_rows if r.get("application_uuid") == uuid],
+                                                  finished=complete, failed=complete).to_dict()
+            else:
+                fleet[uuid] = fleet_mod.FleetRow(uuid, "unknown").to_dict()
+    watch.raise_if_limited()
+    by_res = {r.uuid: r for r in resources}
+    for d in running + (latest or []):
+        where = by_res.get(d.resource_uuid or "")
+        if where is not None:
+            d.project, d.environment = where.project, where.environment
 
     stats = counter.summary()
     stats["duration_ms"] = round((time.monotonic() - started) * 1000)
@@ -548,14 +700,16 @@ def build_snapshot(connection: Connection, *, transport: Transport = urllib_tran
     source = {"role": reader.slot.role.value, "setting": reader.slot.setting,
               "fingerprint": fingerprint(reader.slot.token),
               "scope": {True: "scoped", False: "team-wide", None: "unknown"}[reader.scoped]}
-    skipped = [f"the {v.slot.role.value} token ({v.slot.setting}): {v.state}" for v in views
+    skipped = [f"the {v.slot.role.word} ({v.slot.setting}): {v.state}" for v in views
                if v.state != "ok"]
     if skipped:
         errors.append("not used: " + "; ".join(skipped))
     stats["environments"] = "reused" if known_envs is not None else "read"
-    return Snapshot(servers, resources, {"running": running, "recent_failed": recent_failed}, _now(),
+    stats["history_reads"] = history_reads
+    return Snapshot(servers, resources, {"running": running}, _now(),
                     source, limits, errors, stats,
-                    {str(k): list(v) for k, v in env_map.items()}, envs_epoch)
+                    {str(k): list(v) for k, v in env_map.items()}, envs_epoch,
+                    latest, fleet, histories)
 
 
 # --- cache -------------------------------------------------------------------------------------
@@ -798,9 +952,21 @@ def _matches(r: dict, project: Optional[str], environment: Optional[str]) -> boo
             and (not environment or environment.lower() in (r.get("environment") or "").lower()))
 
 
+def _attention_line(a: dict, by_uuid: dict[str, dict]) -> str:
+    fix = f" [fix: {a['fix']}]" if a.get("fix") else ""
+    word = "at" if a.get("signal") == "env_changed" else "since"
+    since = f" {word} {_when(a.get('since'))} UTC" if a.get("since") else ""
+    detail = f" ({a['detail']})" if a.get("detail") else ""
+    target = a.get("resource_uuid") or a.get("server_uuid")
+    return f"- {a.get('severity')}: {a.get('title')}{detail}{since}{fix}" + (f" (uuid {target})" if target else "")
+
+
+LATEST_IN_OVERVIEW = 8
+
+
 def render_overview(snap: dict, *, project: Optional[str] = None, environment: Optional[str] = None,
-                    max_chars: int = MAX_OVERVIEW_CHARS) -> str:
-    """Compact text for the model, never longer than `max_chars`."""
+                    max_chars: int = MAX_OVERVIEW_CHARS, attention: Optional[list] = None) -> str:
+    """Compact text for the model, never longer than `max_chars`. Opens with what needs the user."""
     resources = snap.get("resources") or []
     by_uuid = {r["uuid"]: r for r in resources}
     filtered = bool(project or environment)
@@ -811,27 +977,38 @@ def render_overview(snap: dict, *, project: Optional[str] = None, environment: O
     source = snap.get("source") or {}
     head = [f"Coolify snapshot taken {_when(snap.get('taken_at'))} UTC "
             f"({'cached, ' + str(cache.get('age_s')) + ' s old' if cache.get('hit') else 'fresh'}; "
-            f"read with the {source.get('role')} token, {source.get('scope')}; "
+            f"read with the {Role(source.get('role')).word if source.get('role') in {r.value for r in Role} else 'token'}, "
+            f"{source.get('scope')}; "
             f"{stats.get('calls')} calls in {(stats.get('duration_ms') or 0) / 1000:.1f} s)"]
     if filtered:
         head.append(f"Filter: project~{project or '*'} environment~{environment or '*'} "
                     f"({len(shown)} of {len(resources)} resources)")
 
+    items = [a for a in (attention if attention is not None else snap.get("attention") or [])
+             if not filtered or not a.get("resource_uuid") or a.get("resource_uuid") in shown_uuids]
+    if items:
+        lines = head + [f"NEEDS YOU ({len(items)}), worst first:"] + [_attention_line(a, by_uuid) for a in items]
+    else:
+        lines = head + ["NEEDS YOU: nothing. No app is failing, no server is down."]
+
     servers = snap.get("servers") or []
-    lines = head + [f"SERVERS ({len(servers)})"] + ([_server_line(s) for s in servers] or ["- none readable"])
+    lines += [f"SERVERS ({len(servers)})"] + ([_server_line(s) for s in servers] or ["- none readable"])
 
     deps = snap.get("deployments") or {}
     running = [d for d in deps.get("running") or [] if not filtered or d.get("resource_uuid") in shown_uuids]
     lines.append(f"DEPLOYMENTS running or queued: {len(running) or 'none'}")
     lines += [_deployment_line(d, by_uuid) + f" status {d.get('status')}" for d in running]
-    failed = deps.get("recent_failed")
-    if failed is None:
-        lines.append("Recent failed deployments: unknown (see LIMITS)")
+    latest = snap.get("latest_deployments")
+    if latest is None:
+        lines.append("Latest deploys: unknown (see LIMITS)")
     else:
-        failed = [d for d in failed if not filtered or d.get("resource_uuid") in shown_uuids]
-        lines.append(f"Recent failed deployments, newest first ({len(failed)}; times UTC):" if failed
-                     else "Recent failed deployments: none")
-        lines += [_deployment_line(d, by_uuid) for d in failed]
+        latest = [d for d in latest if d.get("status") in ("finished", "failed")
+                  and (not filtered or d.get("resource_uuid") in shown_uuids)][:LATEST_IN_OVERVIEW]
+        lines.append(f"LATEST DEPLOYS, newest first, all environments (times UTC):" if latest
+                     else "Latest deploys: none in the window")
+        lines += [_deployment_line(d, by_uuid) + f" {d.get('status')}"
+                  + (" (fixed since by a later deploy)" if d.get("superseded") else "")
+                  + (f" via {d['trigger']}" if d.get("trigger") else "") for d in latest]
 
     counts = {k: sum(1 for r in shown if r["kind"] == k) for k in KINDS}
     lines.append(f"RESOURCES: {counts['application']} applications, {counts['service']} services, "

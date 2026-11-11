@@ -325,7 +325,7 @@ def test_with_read_sensitive_it_fetches_and_classifies(kit):
 def test_the_fetch_uses_the_token_that_holds_read_sensitive(kit):
     out, fake = run(kit, {"tok-a": {"read", "read:sensitive", "deploy"}, "tok-r": {"read"}},
                     action="tok-a", read_token="tok-r")
-    assert out["deployment"]["token"] == "action"
+    assert out["deployment"]["token"] == "api"
     assert [token for _, path, token in fake.requests if path.startswith("/deployments/")] == ["tok-a"]
 
 

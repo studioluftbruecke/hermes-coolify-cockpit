@@ -1,6 +1,7 @@
 """Behaviour of M2: the Snapshot, its cache, the read tools and the dashboard routes, against a
 synthetic instance (`fixtures/snapshot.json`, Coolify 4.6.0 shapes). No network."""
 
+import copy
 import importlib
 import importlib.util
 import json
@@ -42,6 +43,8 @@ class Instance:
                 return client.HttpResponse(404, b'{"message": "Not found"}')
             args = call["params"]["arguments"]
             key = f"{name}:{args['server_uuid']}" if name == "get_server_metrics" else name
+            if name == "list_deployments" and args.get("status") == "finished":
+                key = "list_deployments:finished"
             if key not in data.get("mcp", {}):
                 return client.HttpResponse(400, json.dumps({"jsonrpc": "2.0", "id": call["id"], "error": {
                     "code": -32602, "message": f"Tool [{name}] not found."}}).encode())
@@ -105,7 +108,7 @@ def build(m2, instance, action="tok-action", read="tok-read", **kw):
 def test_recommended_pair_reads_everything_with_the_overview_token(m2):
     inst = Instance({"tok-action": "scoped", "tok-read": "teamwide"})
     snap = build(m2, inst)
-    assert snap["source"]["role"] == "overview" and snap["source"]["scope"] == "team-wide"
+    assert snap["source"]["role"] == "read_only" and snap["source"]["scope"] == "team-wide"
     assert [(s["name"], bool(s["metrics"]), s["metrics_note"] is None) for s in snap["servers"]] == [
         ("main", True, True), ("edge", False, False)]
     assert snap["servers"][0]["metrics"]["current"]["cpu_percent"] == 13.6
@@ -123,9 +126,18 @@ def test_recommended_pair_reads_everything_with_the_overview_token(m2):
     running = snap["deployments"]["running"]
     assert [(d["uuid"], d["resource_uuid"], d["status"]) for d in running] == [
         ("dep-run", "app-shop-staging", "in_progress")]  # REST queue rows name the app only; mapped by name
-    failed = snap["deployments"]["recent_failed"]
-    assert [d["uuid"] for d in failed] == ["dep-fail-2", "dep-fail-1", "dep-fail-0"]  # newest first
-    assert failed[0]["url"].startswith(BASE + "/project/")
+    assert "recent_failed" not in snap["deployments"]  # 0.1.0: replaced by latest_deployments and fleet
+    latest = snap["latest_deployments"]
+    assert [(d["uuid"], d["status"], d["superseded"]) for d in latest] == [
+        ("dep-run", "in_progress", False), ("dep-ok-shop", "finished", False), ("dep-fail-2", "failed", False),
+        ("dep-fail-1", "failed", False), ("dep-ok-1", "finished", False), ("dep-ok-blog", "finished", False),
+        ("dep-fail-0", "failed", True)]  # newest first; blog's old failure was fixed by a later deploy
+    assert latest[2]["url"].startswith(BASE + "/project/")
+    assert [(d["trigger"], d["environment"]) for d in latest[1:2] + latest[5:6]] == [("manual", "production"),
+                                                                                    ("api", "production")]
+    assert {u: r["state"] for u, r in snap["fleet"].items()} == {
+        "app-shop-web": "ok", "app-shop-staging": "deploying", "app-blog": "ok"}
+    assert snap["fleet"]["app-shop-staging"]["last_good"]["commit"] == "9999999aaaaaa"
     assert snap["limits"] == [] and snap["errors"] == []
 
 
@@ -135,11 +147,11 @@ def test_snapshot_sends_only_reads_and_counts_every_call(m2):
     assert {m for m, _, _ in inst.requests} == {"GET", "POST"}
     assert all(m == "GET" or p in ("MCP get_server_metrics", "MCP list_deployments") for m, p, _ in inst.requests)
     stats = snap["stats"]
-    assert stats["calls"] == len(inst.requests) == 11
+    assert stats["calls"] == len(inst.requests) == 12  # 0.1.0: one MCP call more (finished), no REST call more
     assert stats["by_call"] == {"GET /applications": 1, "GET /databases": 1, "GET /deployments": 1,
                                 "GET /projects": 1, "GET /projects/{uuid}": 2, "GET /servers": 2,
-                                "GET /services": 1, "MCP get_server_metrics": 1, "MCP list_deployments": 1}
-    # the action token answered only the scope check
+                                "GET /services": 1, "MCP get_server_metrics": 1, "MCP list_deployments": 2}
+    # the API token answered only the scope check
     assert [p for _, p, t in inst.requests if t == "tok-action"] == ["GET /api/v1/servers"]
 
 
@@ -159,14 +171,16 @@ def test_single_scoped_token_names_the_missing_server_data(m2):
     assert snap["servers"] == []
     assert any("scoped tokens cannot read servers" in x and "COOLIFY_COCKPIT_READ_TOKEN" in x for x in snap["limits"])
     assert [(r["name"], r["environment"]) for r in snap["resources"]] == [("shop-web-staging", "staging")]
-    assert [d["uuid"] for d in snap["deployments"]["recent_failed"]] == ["dep-fail-2", "dep-fail-1"]
+    assert [d["uuid"] for d in snap["latest_deployments"]] == ["dep-fail-2", "dep-fail-1", "dep-ok-1"]
+    row = snap["fleet"]["app-shop-staging"]
+    assert row["state"] == "failing" and row["failing_since"] == "2026-11-04T21:16:00.000000Z"
     assert not any(p == "MCP get_server_metrics" for _, p, _ in inst.requests)
 
 
 def test_two_team_wide_tokens_read_with_the_overview_token(m2):
     inst = Instance({"tok-action": "teamwide", "tok-read": "teamwide"})
     snap = build(m2, inst)
-    assert snap["source"]["role"] == "overview"
+    assert snap["source"]["role"] == "read_only"
 
 
 def test_two_scoped_tokens_read_with_the_one_that_sees_more(m2):
@@ -178,7 +192,7 @@ def test_two_scoped_tokens_read_with_the_one_that_sees_more(m2):
         snap = build(m2, inst)
     finally:
         del FIXTURE["scoped_wide"]
-    assert snap["source"]["role"] == "overview"
+    assert snap["source"]["role"] == "read_only"
     assert len([r for r in snap["resources"] if r["kind"] == "application"]) == 3
     # the tie-break list is reused, not fetched twice
     assert sum(1 for _, p, t in inst.requests if p == "GET /api/v1/applications" and t == "tok-read") == 1
@@ -187,8 +201,9 @@ def test_two_scoped_tokens_read_with_the_one_that_sees_more(m2):
 def test_mcp_off_keeps_the_rest_and_says_what_is_missing(m2):
     inst = Instance({"tok-action": "scoped", "tok-read": "teamwide"}, mcp_off=True)
     snap = build(m2, inst)
-    assert snap["deployments"]["recent_failed"] is None
-    assert any("need Coolify's MCP server" in x and "coolify_deployments" in x for x in snap["limits"])
+    assert snap["latest_deployments"] is None
+    assert any("need Coolify's MCP server" in x and "history instead" in x for x in snap["limits"])
+    assert snap["stats"]["history_reads"] == 3  # the REST fallback reads each app's history (slow cadence)
     assert snap["servers"][0]["metrics"] is None and "metrics unavailable" in snap["servers"][0]["metrics_note"]
     assert len(snap["resources"]) == 5
 
@@ -268,8 +283,8 @@ def test_a_rebuild_reuses_server_metrics_for_a_minute(m2):
 
 def test_a_hint_for_another_token_is_dropped_and_the_reads_redone(m2):
     inst = Instance({"tok-action": "scoped", "tok-read": "teamwide"})
-    snap = build(m2, inst, hint=m2.snap.ReadHint("action", ()))
-    assert snap["stats"]["hint"] == "dropped" and snap["source"]["role"] == "overview"
+    snap = build(m2, inst, hint=m2.snap.ReadHint("api", ()))
+    assert snap["stats"]["hint"] == "dropped" and snap["source"]["role"] == "read_only"
     assert len(snap["resources"]) == 5 and snap["servers"][0]["metrics"] is not None
 
 
@@ -278,14 +293,17 @@ def test_a_hint_for_another_token_is_dropped_and_the_reads_redone(m2):
 def test_overview_text_answers_failures_and_server_load(m2):
     inst = Instance({"tok-action": "scoped", "tok-read": "teamwide"})
     text = m2.pkg.overview_text(settings(), secrets("tok-action", "tok-read"), **setup(m2, inst))
-    assert "read with the overview token, team-wide" in text
+    assert "read with the read-only token, team-wide" in text
     assert "- main: reachable, usable. CPU 14%, RAM 6.0 of 16.0 GiB (38%), disk 40% of 150.0 GiB, load1 0.68" in text
     assert "- edge: reachable, usable. Sentinel metrics are off" in text
     assert "DEPLOYMENTS running or queued: 1" in text
     lines = text.splitlines()
-    first = lines.index(next(l for l in lines if l.startswith("Recent failed deployments")))
-    assert lines[first + 1] == ('- 2026-11-04 21:30 shop-web-staging [Shop / staging] on main commit def5678 '
-                                '"Pin node 20" (deployment dep-fail-2)')
+    first = lines.index(next(l for l in lines if l.startswith("LATEST DEPLOYS")))
+    assert lines[first + 2] == ('- 2026-11-04 21:30 shop-web-staging [Shop / staging] on main commit def5678 '
+                                '"Pin node 20" (deployment dep-fail-2) failed via webhook')
+    assert "(deployment dep-fail-0) failed (fixed since by a later deploy) via webhook" in text
+    # the exited staging app is stopped (not unhealthy) and deploying again (not failing)
+    assert lines[1] == "NEEDS YOU: nothing. No app is failing, no server is down."
     assert "- shop-web-staging (application, Shop / staging): exited:unhealthy" in text
     assert "  blog app running:unknown https://blog.example.test" in text
     assert "tok-" not in text
@@ -348,7 +366,7 @@ def test_a_renamed_app_shows_its_current_name_in_deployments(m2):
         snap = build(m2, Instance({"tok-read": "renamed"}), action=None)
     finally:
         del FIXTURE["renamed"]
-    assert [d["resource_name"] for d in snap["deployments"]["recent_failed"]] == [
+    assert [d["resource_name"] for d in snap["latest_deployments"] if d["status"] == "failed"] == [
         "shop-web-staging", "shop-web-staging", "blog"]
 
 
@@ -454,8 +472,9 @@ def test_plugin_api_mounts_the_routes(monkeypatch):
     spec = importlib.util.spec_from_file_location("coolify_cockpit_api_under_test", root / "dashboard" / "plugin_api.py")
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
-    assert sorted(api.router.routes) == ["/actions", "/capabilities", "/layout", "/notes",
-                                         "/resources/{uuid}/deployments", "/setup", "/snapshot", "POST /actions",
+    assert sorted(api.router.routes) == ["/actions", "/alerts", "/capabilities", "/layout", "/notes",
+                                         "/resources/{uuid}/deployments", "/servers/metrics", "/setup", "/snapshot",
+                                         "POST /actions",
                                          "POST /diagnose", "POST /layout/preset", "POST /notes", "PUT /layout"]
     monkeypatch.setattr(api, "_get_setting", lambda key, default=None: default)  # no URL configured
     monkeypatch.setattr(api, "_get_secret", lambda name: None)
@@ -507,3 +526,77 @@ def test_routes_read_a_token_saved_after_the_plugin_host_started(monkeypatch):
 
     monkeypatch.delenv("HERMES_PLUGIN_HOST_PROCESS")  # in process: the request's own fresh scope
     assert api._get_secret("COOLIFY_COCKPIT_READ_TOKEN") == "removed-since"
+
+
+# --- 0.1.0 M2: the Attention list on a served snapshot -------------------------------------------
+
+def test_served_snapshot_carries_attention_env_changes_and_counts(m2, tmp_path):
+    envs = "GET /api/v1/applications/app-shop-web/envs"
+    FIXTURE["teamwide"]["rest"][envs] = [200, [{"key": "STRIPE_KEY", "updated_at": "2026-11-06T08:00:00.000000Z"}]]
+    try:
+        inst = Instance({"tok-action": "scoped", "tok-read": "teamwide"})
+        status, body = m2.pkg.api_snapshot(settings(), secrets("tok-action", "tok-read"),
+                                           **setup(m2, inst), data_dir=tmp_path)
+        text = m2.pkg.overview_text(settings(), secrets("tok-action", "tok-read"), **setup(m2, inst), data_dir=tmp_path)
+    finally:
+        del FIXTURE["teamwide"]["rest"][envs]
+    assert status == 200
+    assert [(a["signal"], a.get("resource_uuid"), a.get("fix")) for a in body["attention"]] == [
+        ("env_changed", "app-shop-web", "deploy")]
+    assert body["summary"] == [{"signal": "env_changed", "label": "env changed", "severity": "warn", "count": 1}]
+    assert body["fleet"]["app-shop-web"]["env_changed_at"] == "2026-11-06T08:00:00.000000Z"
+    assert "STRIPE_KEY" not in json.dumps(body) and "STRIPE_KEY" not in (tmp_path / "env-check.json").read_text()
+    assert text.splitlines()[1] == "NEEDS YOU (1), worst first:"
+    assert "shop-web (production): env changed after its last deploy at 2026-11-06 08:00 UTC" in text.splitlines()[2]
+    # the env reads are the reading token's, each app once per ENV_TTL_S: the second serve read none
+    env_reads = [p for _, p, _ in inst.requests if p.endswith("/envs")]
+    assert len(env_reads) == 3 and all(t == "tok-read" for _, p, t in inst.requests if p.endswith("/envs"))
+
+
+def test_server_metrics_route_reuses_the_snapshot_for_1h_and_reads_other_ranges_once(m2, tmp_path):
+    inst = Instance({"tok-read": "teamwide"})
+    s = secrets("tok-read", None)
+    kw = setup(m2, inst)
+    status, body = m2.pkg.api_server_metrics(settings(), s, "1h", **kw, data_dir=tmp_path)
+    assert status == 200 and body["range"] == "1h" and body["servers"]
+    before = len(inst.requests)
+    status, body = m2.pkg.api_server_metrics(settings(), s, "1h", **kw, data_dir=tmp_path)
+    assert status == 200 and inst.requests[before:] == []  # 1 h: the snapshot's own series
+    status, body = m2.pkg.api_server_metrics(settings(), s, "6h", **kw, data_dir=tmp_path)
+    reads = [r for r in inst.requests[before:] if "get_server_metrics" in str(r)]
+    assert status == 200 and body["minutes"] == 360 and reads  # one read for 6 h (plus 7 d for the estimate)
+    again = len(inst.requests)
+    m2.pkg.api_server_metrics(settings(), s, "6h", **kw, data_dir=tmp_path)
+    assert inst.requests[again:] == []  # kept in server-metrics.json
+    status, body = m2.pkg.api_server_metrics(settings(), s, "30m", **kw, data_dir=tmp_path)
+    assert status == 400 and body["error"] == "bad_range"
+
+
+# --- 0.1.0 M5: the last good deploy of a failing app past the finished list ------------------
+
+def test_a_failing_app_without_a_listed_success_reads_its_history_once_for_the_last_good(m2):
+    finished = FIXTURE["teamwide"]["mcp"]["list_deployments:finished"]
+    hist10 = "GET /api/v1/deployments/applications/app-shop-staging?skip=0&take=10"
+    hist20 = "GET /api/v1/deployments/applications/app-shop-staging?skip=0&take=20"
+    saved = copy.deepcopy(finished)
+    data = json.loads(finished["content"][0]["text"])
+    data["data"] = [r for r in data["data"] if r["application_uuid"] != "app-shop-staging"]
+    finished["content"][0]["text"] = json.dumps(data)
+    running = FIXTURE["teamwide"]["rest"]["GET /api/v1/deployments"]
+    saved_running = copy.deepcopy(running)
+    running[1] = []  # nothing deploying: the app is failing
+    FIXTURE["teamwide"]["rest"][hist20] = FIXTURE["teamwide"]["rest"][hist10]
+    try:
+        inst = Instance({"tok-read": "teamwide"})
+        first = build(m2, inst, "tok-read", None)
+        row = first["fleet"]["app-shop-staging"]
+        assert row["state"] == "failing" and row["last_good"]["commit"] == "9999999aaaaaa"
+        assert first["stats"]["history_reads"] == 1
+        assert [k for _, k, _ in inst.requests if "take=20" in k] == [hist20]
+        again = build(m2, inst, "tok-read", None, hint=m2.snap.hint_from(first))  # kept: no second read
+        assert again["stats"]["history_reads"] == 0
+        assert again["fleet"]["app-shop-staging"]["last_good"]["commit"] == "9999999aaaaaa"
+    finally:
+        FIXTURE["teamwide"]["mcp"]["list_deployments:finished"] = saved
+        FIXTURE["teamwide"]["rest"]["GET /api/v1/deployments"] = saved_running
+        del FIXTURE["teamwide"]["rest"][hist20]

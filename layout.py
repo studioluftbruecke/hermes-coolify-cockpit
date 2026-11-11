@@ -21,7 +21,7 @@ pane's routes run in different processes.
 
 Nothing here talks to Coolify. Quick-action buttons name an `ActionSpec` kind and a resource; the
 kind and its parameters are checked against the ActionSpec registry (actions.py), and the target
-is resolved only when someone clicks, by the action route with the action token's own view.
+is resolved only when someone clicks, by the action route with the API token's own view.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ except ImportError:  # loaded as a top-level module (tests, scripts)
     from actions import SPECS as ACTION_SPECS_BY_KIND, ActionRefused, check_params  # type: ignore
     from capabilities import FEATURE_RULES  # type: ignore
 
-SCHEMA = 1
+SCHEMA = 2  # 0.1.0 (A11): a file of another schema is discarded for the default
 SIZES = ("s", "m", "l")
 MAX_WIDGETS = 40
 MAX_TITLE = 80
@@ -238,7 +238,7 @@ def _check_quick_actions(props: dict, errors: list[str], where: str) -> None:
 
 _ACTION_BUTTON = Prop(
     "object", "One pinned action: kind (from the ActionSpec registry), target (a resource's exact name or "
-    "uuid; resolved at click time inside the action token's view), optional params and label.",
+    "uuid; resolved at click time inside the API token's view), optional params and label.",
     fields={"kind": Prop("string", "Action kind (checked against the ActionSpec registry).",
                          choices=_RESOURCE_ACTION_KINDS),
             "target": Prop("string", "Exact resource name or uuid."),
@@ -249,45 +249,55 @@ _ACTION_BUTTON = Prop(
 
 WIDGET_TYPES: tuple[WidgetType, ...] = (
     WidgetType(
-        "connection", "Connection and rights",
-        "Reachability, version, each token's rights and scope, and the setup's available / not available lists.",
-        ("capabilities",), "connection",
-        {"show_warnings": Prop("bool", "Show the setup warnings.", True),
-         "show_projects": Prop("bool", "List the projects each token sees.", False)},
-        default_size="m"),
+        "summary", "Summary",
+        "What needs you: one chip per attention signal with its count (failing, unhealthy, env changed, "
+        "server pressure, ...); a click filters the Apps list. One green line when nothing does. Redeploy "
+        "what changed sits here.",
+        ("snapshot.attention",), "resources",
+        {"signals": Prop("list", "Only these signals; empty: all.", item=Prop("string", "Signal id.")),
+         "redeploy_changed": Prop("bool", "Offer \"Redeploy N apps with changed env\".", True)},
+        default_size="l", enhanced_by=("actions",)),
     WidgetType(
-        "servers", "Servers",
-        "Per server: reachable, usable, CPU, RAM, disk, load, network, a small history chart.",
-        ("snapshot.servers",), "servers",
-        {"servers": Prop("list", "Only these servers (names); empty: all.", item=Prop("string", "Server name.")),
-         "metrics": Prop("list", "Which metrics to show; empty: all.",
-                         item=Prop("enum", "Metric.", choices=("cpu", "ram", "disk", "load", "network")),
-                         max_items=5),
-         "history": Prop("bool", "Show the history chart.", True)},
-        default_size="l", enhanced_by=("server_stats",)),
+        "deployments", "Latest deploys",
+        "Latest deploys of every environment, successes included, newest first: status, app, environment, "
+        "commit message, trigger, age, duration. A failed row offers Diagnose (the card opens in place) and "
+        "Roll back to the last good deploy; a failure a later success replaced is dimmed.",
+        ("snapshot.latest_deployments",), "deployments",
+        {"project": _project(), "environment": _environment(),
+         "show": Prop("enum", "Which deployments.", "all", choices=("all", "running", "failed")),
+         "limit": Prop("int", "Rows at most.", 8, minimum=1, maximum=50)},
+        default_size="l", enhanced_by=("actions",)),
     WidgetType(
-        "resources", "Resources",
-        "Applications, services and databases with status, domain, project and environment; optional row actions.",
-        ("snapshot.resources", "actions"), "resources",
+        "resources", "Apps",
+        "Applications of every environment, grouped by environment, with filter chips, deployed commit and "
+        "its age, signal badges, Deploy and Restart; services and databases in a second group. A protected "
+        "environment shows a lock. Apps of one repository in two environments show as a pipeline pair.",
+        ("snapshot.resources", "snapshot.fleet", "actions"), "resources",
         {"project": _project(), "environment": _environment(),
          "kinds": Prop("list", "Only these kinds; empty: all.",
                        item=Prop("enum", "Resource kind.", choices=RESOURCE_KINDS), max_items=3),
          "name_contains": Prop("string", "Only resources whose name contains this."),
          "status": Prop("enum", "Only resources in this state.", "any",
-                        choices=("any", "running", "stopped", "unhealthy")),
+                        choices=("any", "running", "stopped", "unhealthy", "attention")),
          "row_actions": Prop("list", "Action buttons on every row (ActionSpec kinds without parameters); shown "
-                                     "only where the action token holds deploy and sees the resource.",
+                                     "only where the API token holds deploy and sees the resource.",
+                             ["deploy", "restart"],
                              item=Prop("string", "Action kind.", choices=_ROW_ACTION_KINDS), max_items=6),
+         "pairs": Prop("bool", "Show apps of one repository in two environments as a pipeline pair.", True),
          "show_env_keys": Prop("bool", "Show environment variable names (never values).", False)},
         default_size="l", enhanced_by=("team_view", "actions"), check=_check_resources),
     WidgetType(
-        "deployments", "Deployments",
-        "Running deployments and recent failures, linked into Coolify; history per application on demand.",
-        ("snapshot.deployments",), "deployments",
-        {"project": _project(), "environment": _environment(),
-         "show": Prop("enum", "Which deployments.", "all", choices=("all", "running", "failed")),
-         "limit": Prop("int", "Rows at most.", 10, minimum=1, maximum=50)},
-        default_size="m", enhanced_by=("actions",)),
+        "servers", "Servers",
+        "One card per server: CPU, RAM, disk, load and network (in and out), each a value over an area chart, "
+        "with deploy ticks, hover, peak and a disk estimate; one range switch for all servers.",
+        ("snapshot.servers", "server_metrics"), "servers",
+        {"servers": Prop("list", "Only these servers (names); empty: all.", item=Prop("string", "Server name.")),
+         "metrics": Prop("list", "Which metrics to show; empty: all.",
+                         item=Prop("enum", "Metric.", choices=("cpu", "ram", "disk", "load", "network")),
+                         max_items=5),
+         "range": Prop("enum", "Chart range.", "1h", choices=("1h", "6h", "24h", "7d")),
+         "history": Prop("bool", "Show the charts.", True)},
+        default_size="l", enhanced_by=("server_stats",)),
     WidgetType(
         "quick_actions", "Quick actions",
         "Pinned action buttons, each naming an action and a resource. Every click confirms and names the target.",
@@ -295,32 +305,11 @@ WIDGET_TYPES: tuple[WidgetType, ...] = (
         {"buttons": Prop("list", "The pinned buttons, in order.", item=_ACTION_BUTTON, max_items=12)},
         default_size="s", check=_check_quick_actions),
     WidgetType(
-        "diagnosis", "Diagnosis",
-        "Failed deployments with a diagnosis card (class, evidence lines, likely fix); a paste box when no "
-        "token can read logs.",
-        ("snapshot.deployments.recent_failed", "diagnose"), "deployments",
-        {"project": _project(), "environment": _environment(),
-         "paste_box": Prop("bool", "Show the paste box for a log.", True)},
-        default_size="m", enhanced_by=("live_logs",)),
-    WidgetType(
-        "update_notice", "Update notice",
-        "\"Coolify 4.x.y is available\" with a link to the instance.",
-        ("capabilities.instance",), "update_notice",
-        {"include_helpers": Prop("bool", "Also show Sentinel and helper versions.", True)},
-        default_size="s"),
-    WidgetType(
         "notebook", "Instance notebook",
         "COOLIFY.md: what you and the agent learned about this instance.",
         ("notes",), None,
         {"max_entries": Prop("int", "Newest entries shown.", 20, minimum=1, maximum=200),
          "editable": Prop("bool", "Allow editing in the widget.", True)},
-        default_size="m"),
-    WidgetType(
-        "backups", "Backups",
-        "Backup schedules per database and the last run's status.",
-        ("mcp.backups",), "resources",
-        {"project": _project(), "environment": _environment(),
-         "database": Prop("string", "Only databases whose name contains this.")},
         default_size="m"),
     WidgetType(
         "chat", "Cockpit chat",
@@ -471,14 +460,11 @@ class Preset:
 
 
 def _overview(_: dict) -> list[dict]:
-    # Konstantin's own layout from the 2026-11-09 Mac test ("Please use my current layout as the
-    # default one"), with the connection widget last: setup lives on top only until it is done.
-    return [{"id": "deploy-resources", "type": "resources", "title": "Deploy desk: staging", "size": "l",
-             "props": {"environment": "staging", "row_actions": ["deploy", "restart"]}},
-            {"id": "servers", "type": "servers", "size": "l", "props": {}},
-            {"id": "deployments", "type": "deployments", "size": "l", "props": {"show": "all"}},
-            {"id": "resources", "type": "resources", "size": "l", "props": {}},
-            {"id": "connection", "type": "connection", "size": "l", "props": {}}]
+    # 0.1.0 (A5, A14 sketch A): what needs you, what happened last, every app, the servers.
+    return [{"id": "summary", "type": "summary", "size": "l", "props": {}},
+            {"id": "deployments", "type": "deployments", "size": "l", "props": {"limit": 8}},
+            {"id": "apps", "type": "resources", "size": "l", "props": {"row_actions": ["deploy", "restart"]}},
+            {"id": "servers", "type": "servers", "size": "l", "props": {}}]
 
 
 def _deploy_desk(params: dict) -> list[dict]:
@@ -489,36 +475,26 @@ def _deploy_desk(params: dict) -> list[dict]:
         widgets.append({"id": "deploy-actions", "type": "quick_actions", "title": f"Quick actions: {env}",
                         "size": "s", "props": {"buttons": params["buttons"]}})
     widgets += [
-        {"id": "deploy-resources", "type": "resources", "title": f"Deploy desk: {env}", "size": "l",
+        {"id": "deploy-apps", "type": "resources", "title": f"Apps: {env}", "size": "l",
          "props": {**where, "row_actions": list(params.get("row_actions") or ["deploy", "restart"])}},
-        {"id": "deploy-deployments", "type": "deployments", "title": f"Deployments: {env}", "size": "m",
+        {"id": "deploy-deployments", "type": "deployments", "title": f"Latest deploys: {env}", "size": "l",
          "props": {**where, "show": "all", "limit": 10}},
-        {"id": "deploy-diagnosis", "type": "diagnosis", "title": f"Diagnosis: {env}", "size": "m", "props": where},
     ]
     return widgets
 
 
-def _server_watch(_: dict) -> list[dict]:
-    return [{"id": "watch-servers", "type": "servers", "size": "l", "props": {"history": True}},
-            {"id": "watch-update", "type": "update_notice", "size": "s", "props": {}},
-            {"id": "watch-notebook", "type": "notebook", "size": "m", "props": {}}]
-
-
 PRESET_LIST: tuple[Preset, ...] = (
-    Preset("overview", "Overview", "Default: deploy desk for staging, servers, deployments, resources, connection.",
-           {}, _overview),
+    Preset("overview", "Overview", "Default: summary, latest deploys, apps, servers.", {}, _overview),
     Preset("deploy_desk", "Deploy desk",
-           "Resources of one environment with pinned actions, its recent deployments and diagnosis; optional "
-           "quick-action buttons on top.",
+           "One environment in focus: its apps with row actions and its latest deploys; optional quick-action "
+           "buttons on top.",
            {"environment": Prop("string", "The environment, e.g. staging.", "staging"),
             "project": Prop("string", "Only this project."),
-            "row_actions": Prop("list", "Row actions on the resources widget.", ["deploy", "restart"],
+            "row_actions": Prop("list", "Row actions on the apps widget.", ["deploy", "restart"],
                                 item=Prop("string", "Action kind.", choices=_ROW_ACTION_KINDS), max_items=6),
             "buttons": Prop("list", "Quick-action buttons pinned above the desk.", item=_ACTION_BUTTON,
                             max_items=12)},
            _deploy_desk),
-    Preset("server_watch", "Server watch", "Servers with history, the update notice and the notebook.", {},
-           _server_watch),
 )
 PRESETS: dict[str, Preset] = {p.name: p for p in PRESET_LIST}
 DEFAULT_PRESET = "overview"
@@ -719,6 +695,11 @@ class LayoutStore:
             raise LayoutError([f"{self.path.name} holds no layout; save a new one with expected_version null "
                                "to start over"], code="unreadable")
         version = raw.get("version") if isinstance(raw.get("version"), int) else 0
+        if raw.get("schema", 1) != SCHEMA:
+            # A11, T6: a layout of another schema (0.0.x wrote 1) is discarded without a warning. The
+            # default keeps the file's version, so the next compare-and-set save does not conflict.
+            fresh = default_layout()
+            return Layout(fresh.widgets, fresh.preset, version, raw.get("updated_at"), raw.get("updated_by"))
         warnings: list[str] = []
         widgets: list[Widget] = []
         for index, item in enumerate(raw["widgets"]):

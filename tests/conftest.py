@@ -75,6 +75,20 @@ class FakeCoolify:
         return client.HttpResponse(status, raw, "application/json")
 
 
+@pytest.fixture(autouse=True)
+def own_hermes_home(tmp_path_factory, monkeypatch):
+    """A fresh profile home per test. With Hermes importable (check.sh puts its source on
+    PYTHONPATH), the plugin keeps its capability check and notebook in
+    `<HERMES_HOME>/plugin-data/coolify-cockpit/`, so a shared home lets one test's cached check
+    answer the next test's report. Kept out of `tmp_path`, which some tests list. The caller's
+    session platform is cleared too: an agent shell sets HERMES_SESSION_PLATFORM, which the run
+    context falls back to when a test's session has no surface."""
+    home = tmp_path_factory.mktemp("hermes-home")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    return home
+
+
 @pytest.fixture
 def plugin():
     return load_plugin()
@@ -97,15 +111,18 @@ class Kit:
         return lambda key, default=None: values.get(key, default)
 
     def report(self, action=None, read=None, *, check_updates=True, unreachable=False, url=BASE_URL):
-        """Run the tool's report for a setup: `action`/`read` name token fixtures (or None)."""
+        """Run the tool's report for a setup: `action`/`read` name token fixtures (or None).
+
+        Each fixture gets its own token string: the capability check is cached per token
+        fingerprint, so two setups sharing a string would share one check."""
         tokens = {}
         if action:
-            tokens["tok-action"] = action
+            tokens[f"tok-action-{action}"] = action
         if read:
-            tokens["tok-read"] = read
+            tokens[f"tok-read-{read}"] = read
         fake = FakeCoolify(tokens, unreachable=unreachable)
-        secrets = {"COOLIFY_COCKPIT_TOKEN": "tok-action" if action else None,
-                   "COOLIFY_COCKPIT_READ_TOKEN": "tok-read" if read else None}
+        secrets = {"COOLIFY_COCKPIT_TOKEN": f"tok-action-{action}" if action else None,
+                   "COOLIFY_COCKPIT_READ_TOKEN": f"tok-read-{read}" if read else None}
         out = self.plugin.capabilities_report(self.settings(url, check_updates), secrets.get, transport=fake)
         return out, fake
 

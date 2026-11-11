@@ -8,19 +8,19 @@ The order is fixed and every step can refuse before anything is sent to the targ
 
     plan()     1. the spec exists and the parameters are allowed (unknown ones are refused, so
                   nobody can add `docker_cleanup=true` to a stop)
-               2. the action token: the token stored for actions, or the only token. Never the
-                  overview token, even when it holds `deploy` (PRODUCT.md -> Which token does what)
+               2. the API token: the token stored for actions, or the only token. Never the
+                  read-only token, even when it holds `deploy` (PRODUCT.md -> Which token does what)
                3. that token holds `deploy` (the M1 made-up-UUID probe, cached for a minute)
                4. that token can see the target: the resource is in its own lists, or the
                   deployment answers its GET. A resource outside its view is refused here
                5. the request is built from the row; fixed parameters are applied last
-    execute()  sends exactly the planned request with the action token
+    execute()  sends exactly the planned request with the API token
 
-Reads in steps 3 and 4 go only to the action token, and the only non-GET they send is the
+Reads in steps 3 and 4 go only to the API token, and the only non-GET they send is the
 made-up-UUID probe of step 3. The target receives a request only in `execute()`.
 
 Coolify's API rate limit is shared by every token of a user (`coolify_client`), so a click costs
-as few requests as the checks allow: the action token's view (its three lists and the server name
+as few requests as the checks allow: the API token's view (its three lists and the server name
 of each target) is kept for VIEW_TTL_S like the deploy right, so the confirm after a dry run, or the
 handler after the approval hook, re-checks against it without reading again; and the environment
 names come from the snapshot's stored map when the caller passes one (names only; which resources
@@ -184,7 +184,7 @@ class ActionPlan:
 
     @property
     def token_label(self) -> str:
-        return f"{self.slot.role.value} token (sha256 {fingerprint(self.slot.token)})"
+        return f"{self.slot.role.word} (sha256 {fingerprint(self.slot.token)})"
 
     @property
     def confirm_text(self) -> str:
@@ -221,12 +221,12 @@ class ActionPlan:
 # --- step 2: which token acts --------------------------------------------------------------------
 
 def action_slot(connection: Connection) -> TokenSlot:
-    """The action token, or the only token. Never the overview token."""
+    """The API token, or the only token. Never the read-only token."""
     for slot in connection.slots:
         if slot.role in (Role.ACTION, Role.SINGLE):
             return slot
-    raise ActionRefused("not_configured", f"No action token is set. Actions use only {ACTION_SETTING} "
-                                          f"(or a single token); {READ_SETTING} is never used for actions.")
+    raise ActionRefused("not_configured", f"No API token is set. Actions use only {ACTION_SETTING} "
+                                          f"(or the only token); {READ_SETTING} is never used for actions.")
 
 
 # --- step 3: does that token hold `deploy`? --------------------------------------------------------
@@ -272,14 +272,14 @@ def holds_deploy(client: CoolifyClient, cache: AbilityCache = ABILITY_CACHE) -> 
         elif error.kind is ErrorKind.FORBIDDEN:
             held = False
         elif error.kind is ErrorKind.UNAUTHORIZED:
-            raise ActionRefused("unauthorized", "Coolify rejected the action token (401). Store a valid "
+            raise ActionRefused("unauthorized", "Coolify rejected the API token (401). Store a valid "
                                                 f"token as {ACTION_SETTING}.") from None
         elif error.kind is ErrorKind.UNREACHABLE:
             raise ActionRefused("unreachable", f"The Coolify instance did not answer: {error.message}") from None
         elif error.kind is ErrorKind.RATE_LIMITED:
             raise _rate_limited(error) from None
         else:
-            raise ActionRefused("error", f"Could not check the action token's rights: {error}") from None
+            raise ActionRefused("error", f"Could not check the API token's rights: {error}") from None
     cache.put(key, held)
     return held
 
@@ -287,7 +287,7 @@ def holds_deploy(client: CoolifyClient, cache: AbilityCache = ABILITY_CACHE) -> 
 # --- step 4: can that token see the target? -------------------------------------------------------
 
 class ViewCache:
-    """The action token's view (its resources, and the server name of each target it resolved),
+    """The API token's view (its resources, and the server name of each target it resolved),
     per instance and token fingerprint, for VIEW_TTL_S. Memory only: the dry run and the confirm
     run in one process (the plugin host), and so do the approval hook and the tool handler."""
 
@@ -319,7 +319,7 @@ def _view_key(client: CoolifyClient) -> str:
 
 def action_view(client: CoolifyClient, *, environments: Optional[Mapping[int, tuple]] = None,
                 cache: Optional[ViewCache] = None) -> list[dict]:
-    """Every application, service and database the action token itself can see, with project and
+    """Every application, service and database the API token itself can see, with project and
     environment names. Only GETs. `environments` (id -> (project, environment)) saves the token's
     own project reads when it names every environment the token's resources sit in; `cache` keeps
     the view for VIEW_TTL_S."""
@@ -355,16 +355,16 @@ def action_view(client: CoolifyClient, *, environments: Optional[Mapping[int, tu
 
 def _read_refusal(error: CoolifyError) -> ActionRefused:
     if error.kind is ErrorKind.UNAUTHORIZED:
-        return ActionRefused("unauthorized", f"Coolify rejected the action token (401). Store a valid token "
+        return ActionRefused("unauthorized", f"Coolify rejected the API token (401). Store a valid token "
                                              f"as {ACTION_SETTING}.")
     if error.kind is ErrorKind.UNREACHABLE:
         return ActionRefused("unreachable", f"The Coolify instance did not answer: {error.message}")
     if error.kind is ErrorKind.FORBIDDEN:
-        return ActionRefused("outside_action_view", "The action token cannot read resources (it lacks "
+        return ActionRefused("outside_action_view", "The API token cannot read resources (it lacks "
                                                     "`read`), so it cannot see any target.")
     if error.kind is ErrorKind.RATE_LIMITED:
         return _rate_limited(error)
-    return ActionRefused("error", f"Could not read the action token's resources: {error}")
+    return ActionRefused("error", f"Could not read the API token's resources: {error}")
 
 
 def _server_name(client: CoolifyClient, kind: str, uuid: str) -> Optional[str]:
@@ -394,7 +394,7 @@ def _server_name_cached(client: CoolifyClient, kind: str, uuid: str, cache: Opti
 def resolve_resource(client: CoolifyClient, spec: ActionSpec, query: str, *,
                      environments: Optional[Mapping[int, tuple]] = None,
                      cache: Optional[ViewCache] = None) -> Target:
-    """Exact uuid or exact name (any case) inside the action token's view. Unlike the read tools,
+    """Exact uuid or exact name (any case) inside the API token's view. Unlike the read tools,
     an action never picks a resource from part of a name: `shop-web` must not act on
     `shop-web-staging`."""
     resources = action_view(client, environments=environments, cache=cache)
@@ -408,8 +408,8 @@ def resolve_resource(client: CoolifyClient, spec: ActionSpec, query: str, *,
         near = [r["name"] for r in resources if q.lower() in r["name"].lower()][:5]
         hint = f" Did you mean {', '.join(near)}? Name it exactly or pass its uuid." if near else ""
         raise ActionRefused("outside_action_view",
-                            f"No resource named or with the uuid {q!r} among the {len(resources)} the action "
-                            "token can see. Actions run only on resources inside the action token's view; "
+                            f"No resource named or with the uuid {q!r} among the {len(resources)} the API "
+                            "token can see. Actions run only on resources inside the API token's view; "
                             "Coolify's token scope decides that view." + hint)
     found = hits[0]
     if found["kind"] not in spec.target_kinds:
@@ -429,7 +429,7 @@ def resolve_deployment(client: CoolifyClient, deployment_uuid: str, *,
         row = client.get(f"/deployments/{uuid}")
     except CoolifyError as error:
         if error.kind in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN, ErrorKind.SCOPED_REFUSED):
-            raise ActionRefused("outside_action_view", f"The action token cannot see deployment {uuid!r} "
+            raise ActionRefused("outside_action_view", f"The API token cannot see deployment {uuid!r} "
                                                        f"({error.kind.value}).") from None
         raise _read_refusal(error) from None
     if not isinstance(row, dict):
@@ -443,7 +443,7 @@ def resolve_deployment(client: CoolifyClient, deployment_uuid: str, *,
                       if r["uuid"] == app_uuid), None)
         if match is None:
             raise ActionRefused("outside_action_view", f"Deployment {uuid!r} belongs to an application "
-                                                       "outside the action token's view.")
+                                                       "outside the API token's view.")
         name, project, environment = match["name"], match.get("project"), match.get("environment")
     status = str(row.get("status") or "") or None
     if status not in CANCELLABLE:
@@ -493,7 +493,7 @@ def plan(connection: Connection, kind: Any, target: Any, params: Optional[Mappin
          ability_cache: AbilityCache = ABILITY_CACHE, view_cache: Optional[ViewCache] = VIEW_CACHE,
          environments: Optional[Mapping[int, tuple]] = None) -> ActionPlan:
     """Steps 1 to 5. Raises ActionRefused; sends nothing to the target. `environments` are stored
-    environment names (the snapshot's map), `view_cache` keeps the action token's view."""
+    environment names (the snapshot's map), `view_cache` keeps the API token's view."""
     spec = spec_for(kind)
     body = check_params(spec, params)
     if not str(target or "").strip():
@@ -504,9 +504,9 @@ def plan(connection: Connection, kind: Any, target: Any, params: Optional[Mappin
     client = CoolifyClient(connection.base_url, slot.token, timeout=timeout, transport=transport)
     if not holds_deploy(client, ability_cache):
         overview = any(s.role is Role.OVERVIEW for s in connection.slots)
-        raise ActionRefused("no_deploy_right", f"The {slot.role.value} token ({slot.setting}) lacks the "
+        raise ActionRefused("no_deploy_right", f"The {slot.role.word} ({slot.setting}) lacks the "
                                                "`deploy` right, so it cannot run actions."
-                                               + (" Actions never use the overview token, whatever it holds."
+                                               + (" Actions never use the read-only token, whatever it holds."
                                                   if overview else "")
                                                + " Give that token `deploy` in Coolify (Keys & Tokens), scoped "
                                                  "to the environments it may touch.")
@@ -536,9 +536,9 @@ def _deployment_uuid(payload: Any) -> Optional[str]:
 
 def execute(action: ActionPlan, *, transport: Transport = urllib_transport,
             timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Send the planned request with the action token and return Coolify's answer."""
+    """Send the planned request with the API token and return Coolify's answer."""
     if action.slot.role is Role.OVERVIEW:
-        raise AssertionError("actions never use the overview token")
+        raise AssertionError("actions never use the read-only token")
     request = action.request
     if action.spec.kind == "stop" and request.params.get("docker_cleanup") != "false":
         raise AssertionError("stop must send docker_cleanup=false")

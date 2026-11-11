@@ -82,11 +82,15 @@ def render_resource(resource: dict, snapshot: dict, history: Optional[list[dict]
     for d in running:
         lines.append(f"deploying now: {d.get('status')} since {_when(d.get('created_at'))} UTC "
                      f"(deployment {d.get('uuid')})")
-    failed = [d for d in deps.get("recent_failed") or [] if d.get("resource_uuid") == resource["uuid"]]
-    if failed:
-        lines.append(f"failed deployments among the instance's recent failures ({len(failed)}):")
-        lines += [f"- {_when(d.get('created_at'))} UTC commit {(d.get('commit') or '?')[:7]} "
-                  f"(deployment {d.get('uuid')})" for d in failed[:5]]
+    row = (snapshot.get("fleet") or {}).get(resource["uuid"]) or {}
+    if row.get("state") == "failing":
+        good = row.get("last_good") or {}
+        lines.append(f"FAILING: its newest deploy failed (since {_when(row.get('failing_since'))} UTC)"
+                     + (f"; last good commit {str(good.get('commit'))[:7]} on {_when(good.get('created_at'))} UTC"
+                        if good.get("commit") else ""))
+    for a in snapshot.get("attention") or []:
+        if a.get("resource_uuid") == resource["uuid"] and a.get("signal") != "failing":
+            lines.append(f"needs attention: {a.get('title')}")
     if history:
         lines.append(f"last {len(history)} deployments, newest first (times UTC):")
         for d in history:
