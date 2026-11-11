@@ -36,13 +36,16 @@ def test_desktop_description_is_short():
 
 
 def test_settings_entry_has_the_sidebar_name_and_icon():
+    # 0.2.1: the row comes from the shared sidebar-row module (tests/test_sidebar_row.py checks the
+    # copy and the call); the settings entry carries the same brand and codicon.
     js = _plugin_js()
-    nav = re.search(r"area: SIDEBAR_NAV_AREA, order: \d+, data: \{ codicon: '([a-z-]+)', label: NAV_LABEL", js)
+    nav = re.search(r"startSidebarRow\(ctx, \{ brand: '([^']+)', path: PATH, codicon: '([a-z-]+)'", js)
     assert nav, "sidebar row not found"
     page = re.search(r"ctx\.registerSettingsPage\(\{ id: '[a-z-]+', title: NAV_LABEL, icon: '([a-z-]+)'", js)
     assert page, "the settings entry must be registered with the sidebar's NAV_LABEL"
-    assert page.group(1) == nav.group(1), (page.group(1), nav.group(1))
+    assert page.group(1) == nav.group(2), (page.group(1), nav.group(2))
     assert re.search(r"^const NAV_LABEL = 'Coolifybrücke'$", js, re.M)
+    assert nav.group(1) == "Coolifybrücke"
 
 
 # --- 0.1.0 M8: no sentence over 120 characters in the shipped copy ------------------------------

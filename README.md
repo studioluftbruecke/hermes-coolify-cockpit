@@ -49,6 +49,8 @@ same version. With Hermes and Desktop on one computer, one install covers both.
   **Capabilities → Plugins**, switch **Agent in <profile>** off and on, then start a new chat.
 - Same version in both places? Compare the Version column of `hermes plugins list` on the Desktop
   computer and `hermes -p <profile> plugins list` on the server.
+- The sidebar switch and position on the plugin's settings page are kept per Desktop, so a second
+  computer starts with the defaults.
 - Hermes scans every plugin from outside its catalog before it installs it and prints "Warning:
   custom (unreviewed) source". This plugin passes the scan, so `--force` is not needed. `--ref`
   with a full commit SHA pins the install.

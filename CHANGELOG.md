@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.1 (2026-11-11)
+
+The sidebar row gets a switch and a position.
+
+- **Settings → Plugins → Coolifybrücke** has a new section **Sidebar**: **Show in the sidebar**
+  hides or shows the Coolifybrücke row at once, and **Position** moves it (1 to 99, lower numbers
+  sit higher; Kanban is 50). With the row hidden, open the page from the command palette:
+  **Open Coolifybrücke**.
+- The row sits at 54 by default, in one block with the other Studio Luftbrücke plugins below
+  Kanban (it was 55).
+- Both choices are kept by this Desktop, not by the Hermes backend. A second computer starts
+  with the row shown at 54.
+- The row's label stays "Coolifybrücke" and the chat tab stays "Cockpit".
+- The setup step for a profile with the plugin off says "Switch on Coolifybrücke in Capabilities,
+  Plugins." (it named the slug).
+
 ## 0.2.0 (2026-11-11)
 
 Coolify Cockpit is now **Coolifybrücke**, so every Studio Luftbrücke plugin carries a

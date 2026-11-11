@@ -318,9 +318,14 @@ the current layout back, so neither edit is lost silently.
 
 The plugin's Desktop half adds a **Coolifybrücke** row to the sidebar, a status-bar chip (a health
 dot, deployments running, apps failing, an arrow when a Coolify update is out; "Coolify: setup
-needed" before the setup is done), the command **Open Coolifybrücke**, and an entry **Coolify
-Cockpit** in **Settings → Plugins**. It ships switched off: after installing, turn it on in
+needed" before the setup is done), the command **Open Coolifybrücke**, and an entry
+**Coolifybrücke** in **Settings → Plugins**. It ships switched off: after installing, turn it on in
 **Capabilities → Plugins**.
+
+That settings entry has a section **Sidebar**. **Show in the sidebar** hides or shows the row, and
+**Position** moves it: lower numbers sit higher, Kanban is 50, and Coolifybrücke starts at 54. Both
+are kept by this Desktop only. With the row hidden, **Open Coolifybrücke** in the command palette
+still opens the page.
 
 The page draws your saved layout as a grid of widgets (see the table above). A widget your token
 setup cannot fill says in one line why, and what would unlock it.
