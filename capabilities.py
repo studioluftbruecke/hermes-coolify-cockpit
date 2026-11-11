@@ -42,8 +42,8 @@ class Ability(str, Enum):
 
 
 class Role(str, Enum):
-    ACTION = "api"          # COOLIFY_COCKPIT_TOKEN when a read-only token is also set
-    OVERVIEW = "read_only"  # COOLIFY_COCKPIT_READ_TOKEN when an API token is also set
+    ACTION = "api"          # COOLIFYBRUECKE_TOKEN when a read-only token is also set
+    OVERVIEW = "read_only"  # COOLIFYBRUECKE_READ_TOKEN when an API token is also set
     SINGLE = "single"       # the only token set, in either field
 
     @property
@@ -100,9 +100,9 @@ class ConfigError(ValueError):
     pass
 
 
-URL_SETTING = "COOLIFY_COCKPIT_URL"
-ACTION_SETTING = "COOLIFY_COCKPIT_TOKEN"
-READ_SETTING = "COOLIFY_COCKPIT_READ_TOKEN"
+URL_SETTING = "COOLIFYBRUECKE_URL"
+ACTION_SETTING = "COOLIFYBRUECKE_TOKEN"
+READ_SETTING = "COOLIFYBRUECKE_READ_TOKEN"
 
 
 def connection_from_settings(url: Optional[str], action_token: Optional[str],
@@ -447,7 +447,7 @@ def instance_facts(base_url: str, slots: tuple[TokenSlot, ...], tokens: list[Tok
         try:
             result = client.mcp_call("initialize", {
                 "protocolVersion": "2025-11-25", "capabilities": {},
-                "clientInfo": {"name": "hermes-coolify-cockpit", "version": "0"}})
+                "clientInfo": {"name": "hermes-coolifybruecke", "version": "0"}})
             info = (result or {}).get("serverInfo") if isinstance(result, dict) else None
             facts.mcp_enabled = bool(info)
             facts.mcp_detail = f"{info.get('name', '')} {info.get('version', '')}".strip() if info else None

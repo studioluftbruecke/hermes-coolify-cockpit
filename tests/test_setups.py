@@ -47,7 +47,7 @@ def test_single_scoped_token_names_server_stats_and_partial_view(kit):
     assert list(gone) == ["team_view", "servers", "server_stats", "live_logs"]
     assert gone["server_stats"]["reason"] == "No server stats (scoped tokens cannot read servers)"
     assert gone["team_view"]["reason"] == "Only the 5 project(s) inside the token's scope are visible"
-    assert "COOLIFY_COCKPIT_READ_TOKEN" in gone["servers"]["unlock"]
+    assert "COOLIFYBRUECKE_READ_TOKEN" in gone["servers"]["unlock"]
     assert "the API token's scope" in gone["live_logs"]["unlock"]
     assert out["tokens"][0]["role"] == "single"
     assert out["routing"]["actions"] == "single"
@@ -60,7 +60,7 @@ def test_single_teamwide_read_token_is_a_read_only_cockpit(kit):
     assert gone["actions"]["reason"] == "No actions (the API token lacks `deploy`)"
     assert "deploy" in gone["actions"]["unlock"]
     assert gone["live_logs"]["reason"] == "No live logs (no token holds `read:sensitive`)"
-    assert out["tokens"][0]["setting"] == "COOLIFY_COCKPIT_READ_TOKEN"
+    assert out["tokens"][0]["setting"] == "COOLIFYBRUECKE_READ_TOKEN"
     assert out["instance"]["metrics_enabled_servers"] == "2/2"
 
 
@@ -86,7 +86,7 @@ def test_unreachable_instance_unlocks_nothing_and_says_why(kit):
     assert out["available"] == []
     assert ids([e["feature"] for e in out["not_available"]]) == ALL
     assert all("did not answer" in e["reason"] for e in out["not_available"])
-    assert "COOLIFY_COCKPIT_URL" in out["not_available"][0]["unlock"]
+    assert "COOLIFYBRUECKE_URL" in out["not_available"][0]["unlock"]
     assert out["instance"]["reachable"] is False
     assert {t["status"] for t in out["tokens"]} == {"unreachable"}
     assert len(fake.requests) == 2  # one per token, then it stops
@@ -96,7 +96,7 @@ def test_rejected_token_unlocks_nothing_and_says_which_setting(kit):
     out, fake = kit.report(action="rejected")
     assert out["available"] == []
     assert all("rejected (401" in e["reason"] for e in out["not_available"])
-    assert "COOLIFY_COCKPIT_TOKEN" in out["not_available"][0]["unlock"]
+    assert "COOLIFYBRUECKE_TOKEN" in out["not_available"][0]["unlock"]
     assert out["tokens"][0]["status"] == "unauthorized"
     assert any("401" in w for w in out["warnings"])
     assert [r[0] for r in fake.requests if r[3]] == ["GET"]  # stops after the first 401
@@ -135,8 +135,8 @@ def test_update_check_off_sends_nothing_to_the_feed(kit):
 
 
 @pytest.mark.parametrize("url,secrets,expected", [
-    ("", {"COOLIFY_COCKPIT_TOKEN": "x"}, "No Coolify URL"),
-    ("ftp://coolify.example.test", {"COOLIFY_COCKPIT_TOKEN": "x"}, "http"),
+    ("", {"COOLIFYBRUECKE_TOKEN": "x"}, "No Coolify URL"),
+    ("ftp://coolify.example.test", {"COOLIFYBRUECKE_TOKEN": "x"}, "http"),
     ("https://coolify.example.test", {}, "No Coolify token"),
 ])
 def test_missing_settings_explain_what_to_set(kit, url, secrets, expected):

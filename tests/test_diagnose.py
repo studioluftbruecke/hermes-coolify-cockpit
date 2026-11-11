@@ -299,7 +299,7 @@ FAILED_LOGS = json.dumps([
 def run(kit, rights, *, action=None, read_token=None, uuid="dep-failed-1", deployments=None):
     fake = FakeDeployments(kit, rights, deployments if deployments is not None else
                            {"dep-failed-1": {"status": "failed", "logs": FAILED_LOGS}})
-    secrets = {"COOLIFY_COCKPIT_TOKEN": action, "COOLIFY_COCKPIT_READ_TOKEN": read_token}
+    secrets = {"COOLIFYBRUECKE_TOKEN": action, "COOLIFYBRUECKE_READ_TOKEN": read_token}
     out = kit.plugin.diagnose_report({"deployment_uuid": uuid}, kit.settings(), secrets.get, transport=fake)
     return out, fake
 
@@ -375,7 +375,7 @@ def test_route_masks_secrets_in_the_card(plugin):
 
 def test_route_without_read_sensitive_answers_paste_instead(kit):
     fake = FakeDeployments(kit, {"tok-a": {"read", "deploy"}}, {"dep-failed-1": {"status": "failed"}})
-    status, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFY_COCKPIT_TOKEN": "tok-a"}.get,
+    status, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFYBRUECKE_TOKEN": "tok-a"}.get,
                                            {"deployment_uuid": "dep-failed-1"}, transport=fake)
     assert status == 200 and body["ok"] is False and body["paste_instead"] is True
     assert body["error"] == "logs_not_readable"
@@ -385,7 +385,7 @@ def test_route_without_read_sensitive_answers_paste_instead(kit):
 def test_route_with_read_sensitive_fetches_the_log(kit):
     fake = FakeDeployments(kit, {"tok": {"read", "read:sensitive"}},
                            {"dep-failed-1": {"status": "failed", "logs": FAILED_LOGS}})
-    status, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFY_COCKPIT_TOKEN": "tok"}.get,
+    status, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFYBRUECKE_TOKEN": "tok"}.get,
                                            {"deployment_uuid": "dep-failed-1"}, transport=fake)
     assert status == 200 and body["diagnosis"]["class"] == "disk_or_build_cache"
     assert body["diagnosis"]["source"] == "api"
@@ -397,6 +397,6 @@ def test_route_with_read_sensitive_fetches_the_log(kit):
     ({"deployment_uuid": "../servers"}, 400, "invalid_uuid"),
 ])
 def test_route_refuses_bad_input(kit, request_body, status, error):
-    got, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFY_COCKPIT_TOKEN": "tok"}.get, request_body,
+    got, body = kit.plugin.api_diagnose(kit.settings(), {"COOLIFYBRUECKE_TOKEN": "tok"}.get, request_body,
                                         transport=FakeDeployments(kit, {"tok": {"read"}}, {}))
     assert (got, body["error"]) == (status, error)

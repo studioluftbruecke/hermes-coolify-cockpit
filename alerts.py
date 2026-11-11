@@ -5,8 +5,8 @@ script with no model turn and deliver its stdout as written; empty stdout delive
 alert path is:
 
     cron job (no agent, every N minutes)
-      -> shim script `<home>/scripts/coolify-cockpit-alerts.py` (written by `alerts on`)
-        -> `hermes coolify-cockpit tick`  (a Hermes CLI process: holds ctx, reads the secrets)
+      -> shim script `<home>/scripts/coolifybruecke-alerts.py` (written by `alerts on`)
+        -> `hermes coolifybruecke tick`  (a Hermes CLI process: holds ctx, reads the secrets)
           -> the same Attention list the page and the agent read
           -> `diff()` against `alerts-state.json`: new items and recovered ones, printed once
 
@@ -34,30 +34,31 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 STATE_FILE = "alerts-state.json"
-SCRIPT_NAME = "coolify-cockpit-alerts.py"
-JOB_NAME = "Coolify Cockpit alerts"
+SCRIPT_NAME = "coolifybruecke-alerts.py"
+OLD_SCRIPT_NAME = "coolify-cockpit-alerts.py"
+JOB_NAME = "Coolifybrücke alerts"
 DEFAULT_EVERY = "5m"
 MARK = {"bad": "✗", "warn": "!", "info": "·"}
 FIX_WORD = {"deploy": "Deploy", "rollback": "Roll back", "restart": "Restart"}
 _LOCK = threading.Lock()
 
 SHIM = '''#!/usr/bin/env python3
-"""Coolify Cockpit alerts: written by `hermes coolify-cockpit alerts on`; run by a Hermes cron job
+"""Coolifybrücke alerts: written by `hermes coolifybruecke alerts on`; run by a Hermes cron job
 with no model turn. It asks the plugin for what is new since its last run and prints it; Hermes
 delivers the output as written, and an empty output delivers nothing. Remove it with
-`hermes coolify-cockpit alerts off`."""
+`hermes coolifybruecke alerts off`."""
 import os
 import shutil
 import subprocess
 import sys
 
 hermes = shutil.which("hermes") or "hermes"
-run = subprocess.run([hermes, "coolify-cockpit", "tick"], capture_output=True, text=True, timeout=240,
+run = subprocess.run([hermes, "coolifybruecke", "tick"], capture_output=True, text=True, timeout=240,
                      env=dict(os.environ))
 sys.stdout.write(run.stdout)
 if run.returncode != 0:
     tail = (run.stderr or "").strip().splitlines()[-3:]
-    sys.stderr.write("coolify-cockpit tick failed: " + " | ".join(tail) + "\\n")
+    sys.stderr.write("coolifybruecke tick failed: " + " | ".join(tail) + "\\n")
     sys.exit(run.returncode)
 '''
 
@@ -139,7 +140,7 @@ def render(new: list[Mapping[str, Any]], recovered: list[Mapping[str, Any]], *, 
     """The text the job delivers; empty when there is nothing to say."""
     if not new and not recovered:
         return ""
-    lines = [f"Coolify Cockpit · {host}"]
+    lines = [f"Coolifybrücke · {host}"]
     for a in new:
         fix = f" → {FIX_WORD.get(str(a['fix']), str(a['fix']))}" if a.get("fix") else ""
         lines.append(f"{MARK.get(str(a.get('severity')), '·')} {a.get('title')}{fix}")
@@ -167,8 +168,17 @@ def write_shim(home: Path) -> Path:
 
 
 def our_jobs(jobs: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """The cron jobs that run the shim (by script, so a renamed job still counts)."""
-    return [j for j in jobs if str(j.get("script") or "").rstrip("/").endswith(SCRIPT_NAME)]
+    """The cron jobs that run the shim (by script, so a renamed job still counts), 0.1.0's included."""
+    return [j for j in jobs if str(j.get("script") or "").rstrip("/").endswith((SCRIPT_NAME, OLD_SCRIPT_NAME))]
+
+
+def remove_old_shim(home: Path) -> bool:
+    """Delete 0.1.0's shim script. True when it existed."""
+    old = home / "scripts" / OLD_SCRIPT_NAME
+    if not old.exists():
+        return False
+    old.unlink()
+    return True
 
 
 def describe(job: Optional[Mapping[str, Any]], state: Optional[Mapping[str, Any]], now: Optional[float] = None) -> dict:

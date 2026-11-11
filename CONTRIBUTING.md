@@ -1,4 +1,4 @@
-# Contributing to Coolify Cockpit
+# Contributing to Coolifybrücke
 
 Thanks for helping. This file says how to report a problem, how to run the tests, and how a pull
 request lands.
@@ -9,7 +9,7 @@ Open a GitHub issue on this repo.
 
 - **Bug:** what you asked the agent or clicked, what happened, what you expected, your Hermes
   version (`hermes --version`), the plugin version (`hermes plugins list`) and your Coolify version.
-  For a token or setup problem, add the answer of "what can the Coolify cockpit do with my token?".
+  For a token or setup problem, add the answer of "what can Coolifybrücke do with my token?".
   Remove host names, app names, tokens and log secrets first.
 - **Feature:** the job you want to get done, and why the current plugin does not do it.
 
@@ -30,7 +30,7 @@ own gate: manifest, declared capabilities, security scan and the Desktop lint.
 
 ## How pull requests land
 
-Coolify Cockpit is developed in a private workbench, and this repo receives release commits only.
+Coolifybrücke is developed in a private workbench, and this repo receives release commits only.
 So a pull request here is never merged on GitHub. When we accept it, we port the change by hand into
 the workbench with a `Co-authored-by:` line that credits you, and it ships in the next version.
 Then we close your pull request with a link to that release. "Closed" means "landed", not
@@ -47,7 +47,7 @@ Then we close your pull request with a link to that release. "Closed" means "lan
 
 ## Licence and conduct
 
-Coolify Cockpit is MIT licensed. By contributing, you agree that your contribution is licensed
+Coolifybrücke is MIT licensed. By contributing, you agree that your contribution is licensed
 under MIT too.
 
 We follow the [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).

@@ -1,6 +1,6 @@
-# Coolify Cockpit guide
+# Coolifybrücke guide
 
-The full reference for Coolify Cockpit: preparing Coolify, every setting and token setup, the
+The full reference for Coolifybrücke: preparing Coolify, every setting and token setup, the
 attention list, alerts, the tools, actions and approvals, the page, and what each read costs.
 The [README](../README.md) has the short version and every disclosure.
 
@@ -24,14 +24,14 @@ The recommended setup is one token:
 
 | Token | Rights | Scope | Plugin setting |
 | --- | --- | --- | --- |
-| API token | `read` + `deploy` | All projects | `COOLIFY_COCKPIT_TOKEN` |
+| API token | `read` + `deploy` | All projects | `COOLIFYBRUECKE_TOKEN` |
 
 Two optional tokens exist for the cases that need them:
 
 | Token | When | Rights | Plugin setting |
 | --- | --- | --- | --- |
-| Read-only token | Only when your API token is limited to some projects. A limited token cannot read servers and sees nothing outside its projects. A team-wide read token shows servers and every app, and the cockpit never acts with it | `read`, team-wide | `COOLIFY_COCKPIT_READ_TOKEN` |
-| Git host token | Only for "branch ahead" on private repositories when Forgebrücke is not installed (see [Branch ahead](#branch-ahead)) | Read-only repository access on your git host | `COOLIFY_COCKPIT_GIT_TOKEN`, with the setting `git_host` |
+| Read-only token | Only when your API token is limited to some projects. A limited token cannot read servers and sees nothing outside its projects. A team-wide read token shows servers and every app, and the cockpit never acts with it | `read`, team-wide | `COOLIFYBRUECKE_READ_TOKEN` |
+| Git host token | Only for "branch ahead" on private repositories when Forgebrücke is not installed (see [Branch ahead](#branch-ahead)) | Read-only repository access on your git host | `COOLIFYBRUECKE_GIT_TOKEN`, with the setting `git_host` |
 
 The env names are the same as in 0.0.x, so an existing setup keeps working without re-entering a
 token.
@@ -43,10 +43,10 @@ Without it, paste a failed log into the chat for a diagnosis. The cockpit never 
 
 ### Configure the plugin
 
-In Hermes Desktop, open **Coolify Cockpit** in the sidebar. Until the URL and a token are set, the
+In Hermes Desktop, open **Coolifybrücke** in the sidebar. Until the URL and a token are set, the
 page shows two setup steps instead of the widgets: **Coolify URL** and **API token**, each one line
 and one button (**Enter URL**, **Paste token**, and **Open API tokens in Coolify** once the URL is
-set). The buttons open the plugin's settings (**Settings → Plugins → Coolify Cockpit**, with the
+set). The buttons open the plugin's settings (**Settings → Plugins → Coolifybrücke**, with the
 same icon as the sidebar row). The page notices a saved value within a few seconds, without a
 restart, and then shows your layout.
 
@@ -59,20 +59,20 @@ The settings form, in its order:
 
 | Setting | What to enter |
 | --- | --- |
-| Coolify URL (`COOLIFY_COCKPIT_URL`) | The address you open Coolify at |
-| API token (`COOLIFY_COCKPIT_TOKEN`) | A Coolify API token (Coolify: Keys & Tokens → API tokens). Recommended: `read` and `deploy`, all projects |
+| Coolify URL (`COOLIFYBRUECKE_URL`) | The address you open Coolify at |
+| API token (`COOLIFYBRUECKE_TOKEN`) | A Coolify API token (Coolify: Keys & Tokens → API tokens). Recommended: `read` and `deploy`, all projects |
 | Protected environments (`protected_environments`) | Comma-separated environment names. Default `production` |
 | Agent may act on protected environments (`agent_on_protected`) | Off by default. See [Protected environments](#protected-environments) |
 | Let the agent run actions (`agent_actions`) | On by default. Every agent action still asks for your approval; off means only your own clicks act |
 | Disk warning at (%) (`disk_warn_percent`) | Default 85. A server at or over this disk use needs attention |
 | Memory warning at (%) (`memory_warn_percent`) | Default 90. A server at or over this memory use needs attention |
 | Check for Coolify updates (`check_updates`) | On by default |
-| Read-only token (optional) (`COOLIFY_COCKPIT_READ_TOKEN`) | A team-wide token with only `read`. Only if the API token is limited to some projects |
-| Git host token (optional) (`COOLIFY_COCKPIT_GIT_TOKEN`) | A read-only token for your git host |
+| Read-only token (optional) (`COOLIFYBRUECKE_READ_TOKEN`) | A team-wide token with only `read`. Only if the API token is limited to some projects |
+| Git host token (optional) (`COOLIFYBRUECKE_GIT_TOKEN`) | A read-only token for your git host |
 | Git host of that token (optional) (`git_host`) | Where the git host token is sent, for example `git.example.com`. Leave it empty for a GitHub token |
 
 Any setup works: one token or two, limited or team-wide, read-only or full access. Ask Hermes
-"what can the Coolify cockpit do with my token?" and it answers from `coolify_capabilities`:
+"what can Coolifybrücke do with my token?" and it answers from `coolify_capabilities`:
 
 | Setup | Unlocks | Not available, because ... |
 | --- | --- | --- |
@@ -92,26 +92,26 @@ The settings form writes two places, and you can write both yourself. The URL, t
 list, the switches and the thresholds go into the profile's `config.yaml`:
 
 ```bash
-hermes config set plugins.entries.coolify-cockpit.settings.COOLIFY_COCKPIT_URL https://coolify.example.com
+hermes config set plugins.entries.coolifybruecke.settings.COOLIFYBRUECKE_URL https://coolify.example.com
 ```
 
 The other settings take their value the same way, for example
-`hermes config set plugins.entries.coolify-cockpit.settings.check_updates false` or
-`hermes config set plugins.entries.coolify-cockpit.settings.protected_environments "production, shop-live"`.
+`hermes config set plugins.entries.coolifybruecke.settings.check_updates false` or
+`hermes config set plugins.entries.coolifybruecke.settings.protected_environments "production, shop-live"`.
 
 The tokens go into the profile's `.env`, whose path `hermes config env-path` prints. Type each token
 at a hidden prompt, so it never shows on screen, in your shell history or in the process list (the
 lines work in bash and zsh; for another profile, add `-p <profile>` to `hermes config env-path`):
 
 ```bash
-printf 'API token: '; read -rs t && printf 'COOLIFY_COCKPIT_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
+printf 'API token: '; read -rs t && printf 'COOLIFYBRUECKE_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
 ```
 
 Only if you need them, the optional tokens the same way:
 
 ```bash
-printf 'Read-only token: '; read -rs t && printf 'COOLIFY_COCKPIT_READ_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
-printf 'Git host token: '; read -rs t && printf 'COOLIFY_COCKPIT_GIT_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
+printf 'Read-only token: '; read -rs t && printf 'COOLIFYBRUECKE_READ_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
+printf 'Git host token: '; read -rs t && printf 'COOLIFYBRUECKE_GIT_TOKEN=%s\n' "$t" >> "$(hermes config env-path)"; unset t; echo
 ```
 
 To replace a token, delete its old line from `.env` first, so the file holds each name once. Never
@@ -120,8 +120,8 @@ history, and a secret does not belong in `config.yaml`.
 
 ### Check the setup
 
-In a new session, `hermes plugins list` shows `coolify-cockpit` as enabled, and
-`hermes -z "What can the Coolify cockpit do with my token?"` answers from `coolify_capabilities`.
+In a new session, `hermes plugins list` shows `coolifybruecke` as enabled, and
+`hermes -z "What can Coolifybrücke do with my token?"` answers from `coolify_capabilities`.
 
 ## What needs you: the attention list
 
@@ -178,20 +178,20 @@ The page polls only while Hermes Desktop is open. For alerts without it, turn on
 that runs without a model turn:
 
 ```bash
-hermes coolify-cockpit alerts on                       # every 5 minutes, output kept in Hermes
-hermes coolify-cockpit alerts on --every 15m --deliver telegram
-hermes coolify-cockpit alerts status
-hermes coolify-cockpit alerts off
+hermes coolifybruecke alerts on                       # every 5 minutes, output kept in Hermes
+hermes coolifybruecke alerts on --every 15m --deliver telegram
+hermes coolifybruecke alerts status
+hermes coolifybruecke alerts off
 ```
 
-- `alerts on` writes the script `<profile>/scripts/coolify-cockpit-alerts.py` and creates one cron
-  job, "Coolify Cockpit alerts", with no model turn, that runs it. `--every` takes `5m`, `15m`,
+- `alerts on` writes the script `<profile>/scripts/coolifybruecke-alerts.py` and creates one cron
+  job, "Coolifybrücke alerts", with no model turn, that runs it. `--every` takes `5m`, `15m`,
   `1h` and similar (default `5m`). `--deliver` takes `local` (the default: the job's output stays
   in Hermes) or a messaging platform you have connected in Hermes. Running `alerts on` again
   replaces the job instead of adding a second one.
 - `alerts off` removes the job and the script. `alerts status` says whether the job is on, how
   often it runs, where it delivers, when it last checked and how many items are open.
-- The script runs `hermes coolify-cockpit tick`. You can run it yourself: `--peek` shows what is new
+- The script runs `hermes coolifybruecke tick`. You can run it yourself: `--peek` shows what is new
   without marking it as announced, and `--json` adds the facts as JSON.
 
 What a run prints:
@@ -208,25 +208,25 @@ What a run prints:
   announce everything again.
 - One run reads up to 40 env and branch answers, enough for 28 apps in one run.
 
-**From a chat.** The Alerts card in **Settings → Plugins → Coolify Cockpit** shows whether the job is
+**From a chat.** The Alerts card in **Settings → Plugins → Coolifybrücke** shows whether the job is
 on, and its button **Ask Hermes to turn on** (or **Ask Hermes to turn off**) drafts the request into
 the Cockpit chat; nothing is sent until you press send. The agent then runs the command, or, for
 alerts in that chat, creates the same job with its cron tool (`no_agent`, script
-`coolify-cockpit-alerts.py`, deliver `origin`) after `alerts on` wrote the script. Delivery
+`coolifybruecke-alerts.py`, deliver `origin`) after `alerts on` wrote the script. Delivery
 `origin` from a Desktop chat writes a note into that chat. A push to your phone with Desktop closed
 needs a messaging platform connected in Hermes.
 
 ### Morning digest
 
 The plugin registers an automation blueprint, **Coolify morning digest**
-(`coolify-cockpit:morning-digest`). It asks for a time (default 08:00) and a delivery target
+(`coolifybruecke:morning-digest`). It asks for a time (default 08:00) and a delivery target
 (default `origin`). Each morning it runs one model turn that calls `coolify_overview` once and writes
 at most 8 lines: what needs you, yesterday's deploys, and servers under pressure. It never acts.
 
 ## Tools
 
-The tools form the toolset `coolify-cockpit`. Name it to limit a run to them
-(`hermes chat -t coolify-cockpit`) or to give them to a chat platform in `platform_toolsets`.
+The tools form the toolset `coolifybruecke`. Name it to limit a run to them
+(`hermes chat -t coolifybruecke`) or to give them to a chat platform in `platform_toolsets`.
 
 | Tool | What it does |
 | --- | --- |
@@ -314,11 +314,11 @@ click asks for confirmation. Every save carries the layout's version: if the age
 layout while you were editing it (or the other way round), the older save is refused and you get
 the current layout back, so neither edit is lost silently.
 
-### The Cockpit page in Hermes Desktop
+### The Coolifybrücke page in Hermes Desktop
 
-The plugin's Desktop half adds a **Coolify Cockpit** row to the sidebar, a status-bar chip (a health
+The plugin's Desktop half adds a **Coolifybrücke** row to the sidebar, a status-bar chip (a health
 dot, deployments running, apps failing, an arrow when a Coolify update is out; "Coolify: setup
-needed" before the setup is done), the command **Open Coolify Cockpit**, and an entry **Coolify
+needed" before the setup is done), the command **Open Coolifybrücke**, and an entry **Coolify
 Cockpit** in **Settings → Plugins**. It ships switched off: after installing, turn it on in
 **Capabilities → Plugins**.
 
@@ -339,7 +339,7 @@ and the page reloads the newer layout and tells you.
 next question reuses that tab. Nothing is sent until you press send; the chat uses your
 configured provider and model.
 
-**Settings → Plugins → Coolify Cockpit** holds two cards, and the settings form sits under the same
+**Settings → Plugins → Coolifybrücke** holds two cards, and the settings form sits under the same
 entry: **Connection and token** (the result line, the protected environments, each token's rights and scope, and what
 your setup unlocks and what it does not, with the reason) and **Alerts** (see
 [Alerts with Desktop closed](#alerts-with-desktop-closed)).
@@ -372,7 +372,7 @@ data folder). A newer release is also the `update_available` item of the attenti
 
 ### For the agent: skill, `@coolify:` references, redaction
 
-- A bundled skill, `coolify-cockpit:coolify-cockpit`, teaches the agent which tool answers which
+- A bundled skill, `coolifybruecke:coolifybruecke`, teaches the agent which tool answers which
   question, the attention list as the first answer to "what needs me?", the debug order
   (deployments, then details, logs last), the diagnosis catalogue, how to turn alerts on, and the
   safety rules.
@@ -388,7 +388,7 @@ data folder). A newer release is also the `update_available` item of the attenti
 
 ### Backend routes
 
-For the Desktop page, under `/api/plugins/coolify-cockpit/`: `GET /setup` (which settings are
+For the Desktop page, under `/api/plugins/coolifybruecke/`: `GET /setup` (which settings are
 filled in, no Coolify request), `GET /capabilities`,
 `GET /snapshot` (`?refresh=true` skips the cache; it carries the attention list, the per-app fleet
 rows and the latest deploys) and `GET /resources/{uuid}/deployments`
@@ -413,7 +413,7 @@ job back (on or off, schedule, delivery, last check, open items) from Hermes' cr
 profile whose routes run in its plugin host process (`HERMES_PLUGIN_HOST_PROCESS=1`, every
 profile but the one the backend launched as), the host's environment is the profile's `.env` as it
 was when the host started, so each route request reads the plugin's own secrets
-(`COOLIFY_COCKPIT_*`) through Hermes' secret-scope builder (`agent.secret_scope.
+(`COOLIFYBRUECKE_*`) through Hermes' secret-scope builder (`agent.secret_scope.
 build_profile_secret_scope`), the same one a gateway turn uses; a token removed from the settings
 is gone at once there too. In the backend's own process the request already runs in a fresh
 profile scope and the routes use `get_secret`. `GET /setup` says which settings are filled in,

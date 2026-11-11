@@ -125,7 +125,7 @@ _LOADED = {}
 def _plugin():
     if "pkg" not in _LOADED:
         root = pathlib.Path(__file__).resolve().parents[1]
-        name = "coolify_cockpit_m4_under_test"
+        name = "coolifybruecke_m4_under_test"
         spec = importlib.util.spec_from_file_location(name, root / "__init__.py",
                                                       submodule_search_locations=[str(root)])
         module = importlib.util.module_from_spec(spec)
@@ -150,12 +150,12 @@ def acts():
 
 
 def settings(**extra):
-    values = {"COOLIFY_COCKPIT_URL": BASE, **extra}
+    values = {"COOLIFYBRUECKE_URL": BASE, **extra}
     return lambda key, default=None: values.get(key, default)
 
 
 def secrets(action="tok-act", read="tok-read"):
-    return {"COOLIFY_COCKPIT_TOKEN": action, "COOLIFY_COCKPIT_READ_TOKEN": read}.get
+    return {"COOLIFYBRUECKE_TOKEN": action, "COOLIFYBRUECKE_READ_TOKEN": read}.get
 
 
 # --- the registry and the requests it builds ---------------------------------------------------

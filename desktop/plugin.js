@@ -1,4 +1,4 @@
-// Coolify Cockpit: the Desktop half. One page (/coolify-cockpit) that renders the saved layout as a
+// Coolifybrücke: the Desktop half. One page (/coolifybruecke) that renders the saved layout as a
 // grid of widgets, a status-bar chip, a sidebar row and a palette command.
 //
 // Everything the page shows comes from this plugin's own backend routes (dashboard/plugin_api.py)
@@ -45,11 +45,11 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
-const ID = 'coolify-cockpit'
-const PATH = '/coolify-cockpit'
+const ID = 'coolifybruecke'
+const PATH = '/coolifybruecke'
 const TAG = '[' + ID + ']'
 const SESSION_TITLE = 'Cockpit'
-const NAV_LABEL = 'Coolify Cockpit'
+const NAV_LABEL = 'Coolifybrücke'
 const SETTINGS_PAGE = '/settings?tab=plugins&agent=' + ID
 const PLUGINS_PAGE = '/capabilities?tab=plugins'
 const TOKEN_HINT = 'A token you change in the plugin settings is used at once.'
@@ -937,7 +937,7 @@ function QueryError({ error, what }) {
   return el(
     'div',
     { style: S.col(6) },
-    el(Note, { tone: 'bad' }, (what ? what + ': ' : '') + (notFound ? 'the cockpit backend is not enabled on this profile (Hermes: plugins enable coolify-cockpit).' : plain(error.message))),
+    el(Note, { tone: 'bad' }, (what ? what + ': ' : '') + (notFound ? 'the cockpit backend is not enabled on this profile (Hermes: plugins enable coolifybruecke).' : plain(error.message))),
     hint ? el(Small, {}, plain(hint)) : null
   )
 }
@@ -2378,7 +2378,7 @@ function CockpitPage() {
       el(
         'div',
         { style: { ...S.row(10), flexWrap: 'wrap' } },
-        el('h1', { style: { margin: 0, fontSize: '0.9375rem', fontWeight: 600, color: T.primary } }, 'Coolify Cockpit'),
+        el('h1', { style: { margin: 0, fontSize: '0.9375rem', fontWeight: 600, color: T.primary } }, 'Coolifybrücke'),
         inst.url ? el(ExternalLink, { href: inst.url }, el(Small, { style: { color: T.accent } }, hostOf(inst.url))) : null,
         inst.coolify_version ? el(Small, {}, 'v' + inst.coolify_version) : null,
         // A14: the header carries no counts; the summary row is the only place a count shows.
@@ -2509,7 +2509,7 @@ function SetupPanel({ state, data, onCheck, checking }) {
           n: ++n, title: 'Turn on the plugin in this profile',
           action: el(Button, { onClick: () => host.navigate(PLUGINS_PAGE), size: 'xs', variant: 'default' }, el(Codicon, { name: 'extensions', size: '0.75rem' }), 'Open Plugins')
         },
-        el('span', { style: S.text }, 'Switch on coolify-cockpit in Capabilities, Plugins.'))
+        el('span', { style: S.text }, 'Switch on coolifybruecke in Capabilities, Plugins.'))
       : null,
     el(SetupStep, {
         n: ++n, done: Boolean(url.set), title: 'Coolify URL',
@@ -2539,7 +2539,7 @@ function SetupPanel({ state, data, onCheck, checking }) {
 
 // ── status-bar chip ──────────────────────────────────────────────────────────────────────────────
 
-// Settings, Plugins, Coolify Cockpit: the connection, the token's rights and scope, and what the
+// Settings, Plugins, Coolifybrücke: the connection, the token's rights and scope, and what the
 // setup unlocks. The settings form itself sits under this entry (Desktop folds it in).
 function SettingsPage() {
   return el(
@@ -2580,8 +2580,8 @@ function alertsLine(a) {
   return 'On, ' + (a.schedule || '?') + ', to ' + (a.deliver || 'local') + ' · ' + age + ' · ' + (a.open || 0) + ' open'
 }
 
-const ALERTS_ON_PROMPT = 'Turn on Coolify Cockpit alerts: run `hermes coolify-cockpit alerts on`, or create the no-agent cron job the coolify-cockpit skill describes so the alerts land in this chat.'
-const ALERTS_OFF_PROMPT = 'Turn off Coolify Cockpit alerts (`hermes coolify-cockpit alerts off`).'
+const ALERTS_ON_PROMPT = 'Turn on Coolifybrücke alerts: run `hermes coolifybruecke alerts on`, or create the no-agent cron job the coolifybruecke skill describes so the alerts land in this chat.'
+const ALERTS_OFF_PROMPT = 'Turn off Coolifybrücke alerts (`hermes coolifybruecke alerts off`).'
 
 function AlertsCard() {
   const q = useAlerts()
@@ -2620,11 +2620,11 @@ function CockpitChip() {
     return el(
       'button',
       {
-        'aria-label': 'Coolify Cockpit is not set up yet. Open the cockpit to set it up.',
+        'aria-label': 'Coolifybrücke is not set up yet. Open the cockpit to set it up.',
         className: 'inline-flex h-full items-center gap-1 px-1.5 text-[0.6875rem] tabular-nums text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
         onClick: () => host.navigate(PATH),
         style: { background: 'transparent', border: 'none', cursor: 'pointer' },
-        title: 'Coolify Cockpit is not set up yet. Open the cockpit to set it up.',
+        title: 'Coolifybrücke is not set up yet. Open the cockpit to set it up.',
         type: 'button'
       },
       el(StatusDot, { tone: 'muted' }),
@@ -2638,7 +2638,7 @@ function CockpitChip() {
   const update = Boolean(caps.data && caps.data.instance && caps.data.instance.update_available)
   const tone = snap.error ? 'bad' : !snap.data ? 'muted' : servers.some(s => !s.reachable) ? 'bad' : failed ? 'warn' : 'good'
   const title = snap.error
-    ? 'Coolify Cockpit: ' + snap.error.message
+    ? 'Coolifybrücke: ' + snap.error.message
     : 'Coolify: ' + servers.filter(s => s.reachable).length + '/' + servers.length + ' servers reachable, ' + running + ' deploying, ' + failed + ' failing' + (update ? ', update available' : '') + '. Open the cockpit.'
   return el(
     'button',
@@ -2660,7 +2660,7 @@ function CockpitChip() {
 
 export default {
   id: ID,
-  name: 'Coolify Cockpit',
+  name: 'Coolifybrücke',
   description: 'What needs you on your Coolify instance: failing apps, latest deploys, servers. Deploy and restart behind a confirm.',
   defaultEnabled: false,
   register(ctx) {
@@ -2676,7 +2676,7 @@ export default {
     ctx.register({
       id: 'open',
       area: PALETTE_AREA,
-      data: { id: 'coolify-cockpit.open', label: 'Open Coolify Cockpit', keywords: ['coolify', 'cockpit', 'deploy', 'servers'], run: () => host.navigate(PATH) }
+      data: { id: 'coolifybruecke.open', label: 'Open Coolifybrücke', keywords: ['coolify', 'cockpit', 'deploy', 'servers'], run: () => host.navigate(PATH) }
     })
     log('registered', { path: PATH })
   }

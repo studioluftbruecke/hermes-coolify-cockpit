@@ -138,7 +138,7 @@ class ReadError(Exception):
 
 def _http(transport: Transport, url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
     try:
-        response = transport("GET", url, {"User-Agent": "hermes-coolify-cockpit", **headers}, None, TIMEOUT_S)
+        response = transport("GET", url, {"User-Agent": "hermes-coolifybruecke", **headers}, None, TIMEOUT_S)
     except OSError as error:
         raise ReadError("failed", f"no answer: {error}") from error
     return int(response.status), bytes(response.body or b"")

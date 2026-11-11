@@ -1,4 +1,4 @@
-"""coolify-cockpit: a customizable Coolify cockpit for Hermes.
+"""coolifybruecke: Coolifybrücke, a customizable cockpit for Coolify in Hermes.
 
 M1: the connection and the token setup. `coolify_capabilities` detects what the configured
 tokens may do and returns which cockpit features that setup unlocks and which it does not.
@@ -11,13 +11,13 @@ M4: `coolify_action` runs one lifecycle action (`actions.py`) behind the Hermes 
 M7: the instance notebook `COOLIFY.md` (`notes.py`, tool `coolify_notes`), entries the cockpit writes
 itself when a capabilities check or a fresh snapshot sees a change (version, servers, token rights),
 and the one-line update notice in `coolify_capabilities` and `coolify_overview`.
-M8: the bundled skill (`skills/coolify-cockpit/SKILL.md`), the `@coolify:` context references
+M8: the bundled skill (`skills/coolifybruecke/SKILL.md`), the `@coolify:` context references
 (`references.py`) and the secret formats of `redact.py` registered with Hermes' own redaction.
 M5: `coolify_cockpit` reads and edits the cockpit layout (`layout.py`): widgets, presets, the
 WidgetType registry. `GET/PUT /layout` and `POST /layout/preset` serve the pane the same file.
 
-Settings (plugin.yaml `config_schema`): `COOLIFY_COCKPIT_URL` and `check_updates` live in the
-profile config; the tokens `COOLIFY_COCKPIT_TOKEN` and `COOLIFY_COCKPIT_READ_TOKEN` are secrets in
+Settings (plugin.yaml `config_schema`): `COOLIFYBRUECKE_URL` and `check_updates` live in the
+profile config; the tokens `COOLIFYBRUECKE_TOKEN` and `COOLIFYBRUECKE_READ_TOKEN` are secrets in
 the profile `.env`, read at call time through Hermes' secret scope (catalog rule 11). The plugin
 never reads `COOLIFY_API_TOKEN` or `COOLIFY_BASE_URL`: Coolify injects those into every container
 it runs, so they would describe the host, not the user's choice.
@@ -33,8 +33,8 @@ import json
 import importlib
 from typing import Any, Callable, Optional
 
-PLUGIN = "coolify-cockpit"
-TOOLSET = "coolify-cockpit"
+PLUGIN = "coolifybruecke"
+TOOLSET = "coolifybruecke"
 
 SettingGetter = Callable[[str, Any], Any]
 SecretGetter = Callable[[str], Optional[str]]
@@ -206,7 +206,7 @@ COOLIFY_OVERVIEW = {
         "'why did the last (staging) deploy fail?' use three calls and stop: this tool with "
         "environment=, then coolify_deployments with the failing app's newest failed deployment id "
         "from LATEST DEPLOYS, then coolify_diagnose with that id. The bundled skill is "
-        "skill_view('coolify-cockpit:coolify-cockpit')."
+        "skill_view('coolifybruecke:coolifybruecke')."
     ),
     "parameters": {
         "type": "object",
@@ -248,15 +248,9 @@ def _client():
 
 
 def _default_cache_file():
-    """`<profile>/plugin-data/coolify-cockpit/snapshot-cache.json`, or None outside Hermes."""
-    try:
-        from plugins.plugin_storage import plugin_data_dir
-    except ImportError:
-        return None
-    try:
-        return plugin_data_dir(PLUGIN) / "snapshot-cache.json"
-    except Exception:  # an unwritable data dir disables the shared layer, not the snapshot
-        return None
+    """`<profile>/plugin-data/coolifybruecke/snapshot-cache.json`, or None outside Hermes."""
+    data_dir = _default_data_dir()  # an unwritable data dir disables the shared layer, not the snapshot
+    return data_dir / "snapshot-cache.json" if data_dir is not None else None
 
 
 class _Setup:
@@ -360,7 +354,7 @@ def _branches():
 # in the plugin host child, where register() never ran (M0c): there it stays empty and the routes
 # leave Forgebrücke's apps to the tick and the agent's turns.
 _CTX_DISPATCH: dict[str, Any] = {}
-GIT_TOKEN_SETTING = "COOLIFY_COCKPIT_GIT_TOKEN"
+GIT_TOKEN_SETTING = "COOLIFYBRUECKE_GIT_TOKEN"
 GIT_HOST_SETTING = "git_host"
 
 
@@ -529,7 +523,7 @@ def make_deployments_handler(get_setting: SettingGetter, get_secret: SecretGette
 # a wrong or missing token explains point at the setting.
 
 TOKEN_REFRESH_HINT = (
-    "Check the Coolify token in the plugin settings (Settings, Plugins, coolify-cockpit): it may be "
+    "Check the Coolify token in the plugin settings (Settings, Plugins, Coolifybrücke): it may be "
     "missing, mistyped, paused or revoked in Coolify. A token saved there is used at once.")
 
 
@@ -1265,7 +1259,7 @@ def _register_actions(ctx, get_setting: SettingGetter) -> None:
 COOLIFY_COCKPIT = {
     "name": "coolify_cockpit",
     "description": (
-        "Read or rearrange the Coolify Cockpit page in Hermes Desktop: an ordered list of widgets, "
+        "Read or rearrange the Coolifybrücke page in Hermes Desktop: an ordered list of widgets, "
         "top to bottom. Operations: get (the layout, the widget types with their props, the "
         "presets), add_widget (widget {type, id?, title?, size s|m|l, props}, position), "
         "remove_widget (widget_id), update_widget (widget_id, changes {title?, size?, props?}; props "
@@ -1282,7 +1276,7 @@ COOLIFY_COCKPIT = {
         "pinned button runs only when the user clicks it. Unknown types or props are rejected with "
         "the list of known ones. Pass expected_version (from get) to refuse the edit if the layout "
         "changed meanwhile; without it, the edit applies to the newest layout. The bundled skill is "
-        "skill_view('coolify-cockpit:coolify-cockpit')."
+        "skill_view('coolifybruecke:coolifybruecke')."
     ),
     "parameters": {
         "type": "object",
@@ -1336,15 +1330,9 @@ def cockpit_tool_schema() -> dict:
 
 
 def _default_layout_file():
-    """`<profile>/plugin-data/coolify-cockpit/layout.json`, or None outside Hermes."""
-    try:
-        from plugins.plugin_storage import plugin_data_dir
-    except ImportError:
-        return None
-    try:
-        return plugin_data_dir(PLUGIN) / _layout().LAYOUT_FILE
-    except Exception:
-        return None
+    """`<profile>/plugin-data/coolifybruecke/layout.json`, or None outside Hermes."""
+    data_dir = _default_data_dir()
+    return data_dir / _layout().LAYOUT_FILE if data_dir is not None else None
 
 
 def layout_store(path: Any = "default"):
@@ -1533,13 +1521,14 @@ def _notes():
 
 
 def _default_data_dir():
-    """`<profile>/plugin-data/coolify-cockpit/`, or None outside Hermes."""
+    """`<profile>/plugin-data/coolifybruecke/` with 0.1.0's files carried over (migrate.py), or None
+    outside Hermes. Every default path of the plugin goes through here."""
     try:
         from plugins.plugin_storage import plugin_data_dir
     except ImportError:
         return None
     try:
-        return plugin_data_dir(PLUGIN)
+        return importlib.import_module(".migrate", __package__ or __name__).data_dir(plugin_data_dir, PLUGIN)
     except Exception:  # an unwritable data dir disables the notebook, not the other tools
         return None
 
@@ -1706,9 +1695,9 @@ def _register_notes(ctx, get_setting: SettingGetter) -> None:
 # reload answers with the new code, and a disabled (unloaded) plugin answers nothing.
 
 REFERENCE_PREFIX = "coolify"
-REFERENCE_DESCRIPTION = ("Coolify Cockpit live state: overview, a resource name, deployment/<uuid>, "
+REFERENCE_DESCRIPTION = ("Coolifybrücke live state: overview, a resource name, deployment/<uuid>, "
                          "server/<uuid>, notes")
-SKILL_NAME = "coolify-cockpit"
+SKILL_NAME = "coolifybruecke"
 _M8_LIVE: dict[str, Any] = {}  # the current load's settings getter, read by the provider
 
 
@@ -1859,7 +1848,7 @@ def _register_agent_kit(ctx, get_setting: SettingGetter) -> None:
 
 # --- 0.1.0 M6: alerts as a no-model cron job, the morning digest (alerts.py) ---------------------
 #
-# `hermes coolify-cockpit tick` runs where the plugin ctx exists (a Hermes CLI process), so it can
+# `hermes coolifybruecke tick` runs where the plugin ctx exists (a Hermes CLI process), so it can
 # also ask Forgebrücke for branch heads (M7). `alerts on` writes the shim script and creates the cron
 # job that runs it; `alerts off` removes both; `alerts status` reads them back. The agent can do the
 # same from a chat with its cronjob tool (the skill says how), which delivers into that chat.
@@ -1947,6 +1936,7 @@ def alerts_on(every: str, deliver: str, *, home: Any = None) -> dict:
     for job in alerts.our_jobs(cron_jobs.list_jobs(include_disabled=True)):
         cron_jobs.remove_job(job["id"])
         removed.append(job["id"])
+    alerts.remove_old_shim(Path(home))
     job = cron_jobs.create_job(None, every, name=alerts.JOB_NAME, deliver=deliver, script=script.name,
                                no_agent=True)
     return {"job_id": job["id"], "schedule": job.get("schedule_display"), "deliver": job.get("deliver"),
@@ -1968,6 +1958,7 @@ def alerts_off(*, home: Any = None) -> dict:
     existed = script.exists()
     if existed:
         script.unlink()
+    existed = alerts.remove_old_shim(Path(home)) or existed
     return {"removed_jobs": removed, "removed_script": existed}
 
 
@@ -2016,9 +2007,9 @@ def make_cli_handler(get_setting: SettingGetter, get_secret: SecretGetter = _def
                 print(f"Alerts on: {status['schedule']}, delivered to {status['deliver']}{seen}, "
                       f"{status['open']} open item(s).")
             else:
-                print("Alerts off. Turn them on with: hermes coolify-cockpit alerts on")
+                print("Alerts off. Turn them on with: hermes coolifybruecke alerts on")
             return 0
-        print("Usage: hermes coolify-cockpit {tick,alerts {on,off,status}}")
+        print("Usage: hermes coolifybruecke {tick,alerts {on,off,status}}")
         return 2
 
     return handler
@@ -2043,9 +2034,9 @@ DIGEST_PROMPT = (
 def _register_alerts(ctx, get_setting: SettingGetter) -> None:
     _CTX_DISPATCH["dispatch"] = getattr(ctx, "dispatch_tool", None)  # M7: Forgebrücke's branch heads
     if hasattr(ctx, "register_cli_command"):
-        ctx.register_cli_command(name="coolify-cockpit", help="Coolify Cockpit: tick and alerts",
+        ctx.register_cli_command(name="coolifybruecke", help="Coolifybrücke: tick and alerts",
                                  setup_fn=_cli_setup, handler_fn=make_cli_handler(get_setting),
-                                 description="Coolify Cockpit commands (tick, alerts on/off/status).")
+                                 description="Coolifybrücke commands (tick, alerts on/off/status).")
     if hasattr(ctx, "register_automation_blueprint"):
         try:
             ctx.register_automation_blueprint(
@@ -2057,7 +2048,7 @@ def _register_alerts(ctx, get_setting: SettingGetter) -> None:
                        {"name": "deliver", "type": "enum", "label": "Where to deliver?", "default": "origin",
                         "options": ("origin", "local", "telegram", "discord", "email"), "strict": False,
                         "help": "origin = the chat you set this up from; local = save only"}],
-                skills=("coolify-cockpit:coolify-cockpit",), tags=("coolify", "digest"))
+                skills=("coolifybruecke:coolifybruecke",), tags=("coolify", "digest"))
         except Exception:
             pass  # an older Hermes without blueprints, or a second load in this process
 

@@ -27,7 +27,7 @@ _LOADED = {}
 
 def _plugin():
     if "pkg" not in _LOADED:
-        name = "coolify_cockpit_m78_under_test"
+        name = "coolifybruecke_m78_under_test"
         spec = importlib.util.spec_from_file_location(name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
@@ -92,12 +92,12 @@ class Instance:
 
 
 def settings(**extra):
-    values = {"COOLIFY_COCKPIT_URL": BASE, "check_updates": True, **extra}
+    values = {"COOLIFYBRUECKE_URL": BASE, "check_updates": True, **extra}
     return lambda key, default=None: values.get(key, default)
 
 
 def secrets(action="tok-action", read="tok-read"):
-    return {"COOLIFY_COCKPIT_TOKEN": action, "COOLIFY_COCKPIT_READ_TOKEN": read}.get
+    return {"COOLIFYBRUECKE_TOKEN": action, "COOLIFYBRUECKE_READ_TOKEN": read}.get
 
 
 def setup(m, inst, data_dir, **kw):
@@ -208,7 +208,7 @@ def token(m, rights, scope="scoped", fp="aaaa1111"):
 
 def test_first_observation_only_records_state(m, tmp_path):
     entries = m.notes.observe(tmp_path, obs(m, coolify_version="4.6.0", servers={"s1": "main"},
-                                           tokens={"COOLIFY_COCKPIT_TOKEN": token(m, ["read"])}))
+                                           tokens={"COOLIFYBRUECKE_TOKEN": token(m, ["read"])}))
     assert entries == [] and not (tmp_path / "COOLIFY.md").exists()
     state = json.loads((tmp_path / "observed-state.json").read_text())
     stored = state["instances"][m.notes.instance_key(BASE)]
@@ -239,11 +239,11 @@ def test_server_added_and_removed_write_one_entry_each(m, tmp_path):
 
 
 def test_rights_or_scope_change_writes_one_entry(m, tmp_path):
-    setting = "COOLIFY_COCKPIT_TOKEN"
+    setting = "COOLIFYBRUECKE_TOKEN"
     m.notes.observe(tmp_path, obs(m, tokens={setting: token(m, ["read", "deploy"])}))
     entries = m.notes.observe(tmp_path, obs(m, tokens={setting: token(m, ["read", "deploy", "read:sensitive"])}))
     assert len(entries) == 1
-    assert entries[0].text == ("The token in COOLIFY_COCKPIT_TOKEN: gained read:sensitive. Rights now: deploy, "
+    assert entries[0].text == ("The token in COOLIFYBRUECKE_TOKEN: gained read:sensitive. Rights now: deploy, "
                                "read, read:sensitive; scoped.")
     entries = m.notes.observe(tmp_path, obs(m, tokens={setting: token(m, ["read"], "team-wide", fp="bbbb2222")}))
     assert len(entries) == 1 and "(a different token is stored there now)" in entries[0].text
@@ -262,7 +262,7 @@ def test_no_change_writes_nothing(m, tmp_path):
 
 def test_capabilities_notice_and_version_change_entry(m, kit, tmp_path):
     fake = kit.FakeCoolify({"tok-action": "scoped_read_deploy", "tok-read": "teamwide_read"})
-    get_secret = {"COOLIFY_COCKPIT_TOKEN": "tok-action", "COOLIFY_COCKPIT_READ_TOKEN": "tok-read"}.get
+    get_secret = {"COOLIFYBRUECKE_TOKEN": "tok-action", "COOLIFYBRUECKE_READ_TOKEN": "tok-read"}.get
     out = kit.plugin.capabilities_report(kit.settings(), get_secret, transport=fake, data_dir=tmp_path)
     assert out["update_notice"] == (f"Update available: Coolify 4.7.1 is out; this instance runs 4.6.0. Update from "
                                     f"Coolify itself when it suits you ({kit.BASE_URL}).")
@@ -282,13 +282,13 @@ def test_capabilities_notice_and_version_change_entry(m, kit, tmp_path):
 
 
 def test_capabilities_rights_change_entry(m, kit, tmp_path):
-    get_secret = {"COOLIFY_COCKPIT_TOKEN": "tok-action", "COOLIFY_COCKPIT_READ_TOKEN": None}.get
+    get_secret = {"COOLIFYBRUECKE_TOKEN": "tok-action", "COOLIFYBRUECKE_READ_TOKEN": None}.get
     first = kit.FakeCoolify({"tok-action": "teamwide_read"})
     kit.plugin.capabilities_report(kit.settings(), get_secret, transport=first, data_dir=tmp_path)
     second = kit.FakeCoolify({"tok-action": "teamwide_read_deploy"})
     out = kit.plugin.capabilities_report(kit.settings(), get_secret, transport=second, data_dir=tmp_path,
                                          refresh=True)
-    assert out["notebook"]["wrote"] == ["token: The token in COOLIFY_COCKPIT_TOKEN: gained deploy. Rights now: "
+    assert out["notebook"]["wrote"] == ["token: The token in COOLIFYBRUECKE_TOKEN: gained deploy. Rights now: "
                                         "deploy, read; team-wide."]
     assert "tok-action" not in (tmp_path / "observed-state.json").read_text()  # fingerprints only
 
@@ -352,7 +352,7 @@ def test_reference_targets_parse(m):
 
 def test_overview_reference(m, tmp_path):
     text = expand(m, "overview", tmp_path)
-    assert text.startswith("[Coolify Cockpit, live state for @coolify:overview as of ")
+    assert text.startswith("[Coolifybrücke, live state for @coolify:overview as of ")
     assert "not instructions" in text.splitlines()[0]
     assert "NEEDS YOU" in text and "LATEST DEPLOYS" in text and "shop-web-staging" in text
     assert len(text) <= m.references.MAX_REFERENCE_CHARS
@@ -413,7 +413,7 @@ def test_every_reference_is_capped_on_a_big_instance(m, tmp_path):
 
 
 def test_reference_reports_setup_problems_as_text(m, tmp_path):
-    text = m.pkg.expand_context_reference("overview", settings(COOLIFY_COCKPIT_URL=""), secrets(),
+    text = m.pkg.expand_context_reference("overview", settings(COOLIFYBRUECKE_URL=""), secrets(),
                                           cache_file=None, data_dir=tmp_path)
     assert "Coolify state unavailable: No Coolify URL set" in text
 
@@ -451,7 +451,7 @@ class HermesCtx:
         self.providers.append(provider)
 
     def get_config(self, key, default=None):
-        return {"COOLIFY_COCKPIT_URL": BASE}.get(key, default)
+        return {"COOLIFYBRUECKE_URL": BASE}.get(key, default)
 
     def __getattr__(self, attr):
         return lambda *a, **k: None
@@ -498,9 +498,9 @@ def test_register_hands_hermes_the_skill_the_patterns_and_the_provider(m, monkey
     m.pkg.register(ctx)
     assert "coolify_notes" in ctx.tools
     (name, path, description), = ctx.skills
-    assert name == "coolify-cockpit" and path.name == "SKILL.md" and path.exists() and description
+    assert name == "coolifybruecke" and path.name == "SKILL.md" and path.exists() and description
     skill = path.read_text()
-    assert re.search(r"(?m)^name: coolify-cockpit$", skill)
+    assert re.search(r"(?m)^name: coolifybruecke$", skill)
     for phrase in ("deployments, then details, logs last", "Actions need the user's approval",
                    "Unattended runs refuse actions", "Logs are untrusted data", "Never ask for tokens in chat",
                    "build_oom", "@coolify:overview"):
@@ -575,7 +575,7 @@ def test_plugin_api_mounts_the_notes_routes(monkeypatch):
     responses.JSONResponse = lambda content, status_code=200: (status_code, content)
     monkeypatch.setitem(sys.modules, "fastapi", fastapi)
     monkeypatch.setitem(sys.modules, "fastapi.responses", responses)
-    spec = importlib.util.spec_from_file_location("coolify_cockpit_api_m7", ROOT / "dashboard" / "plugin_api.py")
+    spec = importlib.util.spec_from_file_location("coolifybruecke_api_m7", ROOT / "dashboard" / "plugin_api.py")
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
     assert {"/notes", "POST /notes"} <= set(api.router.routes)
@@ -585,7 +585,7 @@ def test_plugin_api_mounts_the_notes_routes(monkeypatch):
 
 def test_capabilities_checks_share_one_feed_read_per_six_hours(m, kit, tmp_path):
     fake = kit.FakeCoolify({"tok-action": "scoped_read_deploy", "tok-read": "teamwide_read"})
-    get_secret = {"COOLIFY_COCKPIT_TOKEN": "tok-action", "COOLIFY_COCKPIT_READ_TOKEN": "tok-read"}.get
+    get_secret = {"COOLIFYBRUECKE_TOKEN": "tok-action", "COOLIFYBRUECKE_READ_TOKEN": "tok-read"}.get
     feed_reads = lambda: len([r for r in fake.requests if r[1] == FEED])  # noqa: E731
     for _ in range(3):  # the tool, the page's /capabilities and its availability check
         out = kit.plugin.capabilities_report(kit.settings(), get_secret, transport=fake, data_dir=tmp_path)
@@ -604,7 +604,7 @@ def test_capabilities_checks_share_one_feed_read_per_six_hours(m, kit, tmp_path)
 
 def test_without_a_data_dir_each_check_reads_the_feed(kit):
     fake = kit.FakeCoolify({"tok-action": "scoped_read_deploy"})
-    get_secret = {"COOLIFY_COCKPIT_TOKEN": "tok-action", "COOLIFY_COCKPIT_READ_TOKEN": None}.get
+    get_secret = {"COOLIFYBRUECKE_TOKEN": "tok-action", "COOLIFYBRUECKE_READ_TOKEN": None}.get
     for _ in range(2):
         kit.plugin.capabilities_report(kit.settings(), get_secret, transport=fake, data_dir=None)
     assert len([r for r in fake.requests if r[1] == FEED]) == 2

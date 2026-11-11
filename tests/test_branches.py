@@ -19,7 +19,7 @@ HEAD = "b" * 40
 
 
 def _load():
-    name = "coolify_cockpit_branches_under_test"
+    name = "coolifybruecke_branches_under_test"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
         module = importlib.util.module_from_spec(spec)

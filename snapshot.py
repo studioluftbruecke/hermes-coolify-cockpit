@@ -317,7 +317,7 @@ def choose_reader(views: list[_View]) -> Optional[_View]:
 
 def _no_reader_message(views: list[_View]) -> str:
     if all(v.state == "unreachable" for v in views):
-        return (f"The Coolify instance did not answer ({views[0].detail}). Check COOLIFY_COCKPIT_URL, "
+        return (f"The Coolify instance did not answer ({views[0].detail}). Check COOLIFYBRUECKE_URL, "
                 "that the instance is up, and Coolify's allowed IPs (Settings → Advanced → API).")
     parts = []
     for v in views:

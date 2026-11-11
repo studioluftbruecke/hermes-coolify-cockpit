@@ -43,7 +43,7 @@ def test_an_item_is_announced_once_and_recovers_once(m):
     new, rec, state = a.diff([failing], None, key="k", now=10.0)
     assert [x["key"] for x in new] == ["failing:app-1"] and rec == []
     assert a.render(new, rec, host="coolify.example.test") == (
-        "Coolify Cockpit · coolify.example.test\n✗ shop (staging) failed its last deploy → Roll back\n")
+        "Coolifybrücke · coolify.example.test\n✗ shop (staging) failed its last deploy → Roll back\n")
     new, rec, state = a.diff([failing], state, key="k", now=20.0)
     assert new == [] and rec == [] and a.render(new, rec, host="h") == ""  # nothing new prints nothing
     new, rec, state = a.diff([], state, key="k", now=30.0)
@@ -108,7 +108,7 @@ def test_tick_announces_then_stays_quiet_then_recovers(m, tmp_path):
         text, facts = m.pkg.tick_report(ts.settings(), ts.secrets("tok-action", "tok-read"),
                                         cache=snap_mod.SnapshotCache(), **kw)
         assert facts["first_run"] is True and facts["new"] == 1
-        assert text.splitlines() == ["Coolify Cockpit · coolify.example.test",
+        assert text.splitlines() == ["Coolifybrücke · coolify.example.test",
                                      "! shop-web (production): env changed after its last deploy → Deploy"]
         text, facts = m.pkg.tick_report(ts.settings(), ts.secrets("tok-action", "tok-read"),
                                         cache=snap_mod.SnapshotCache(), **kw)
@@ -180,7 +180,7 @@ def test_alerts_on_is_idempotent_and_off_removes_job_and_script(m, tmp_path, mon
     monkeypatch.setattr(m.pkg, "_cron_jobs", lambda: cron)
     out = m.pkg.alerts_on("5m", "local", home=tmp_path)
     shim = tmp_path / "scripts" / m.alerts.SCRIPT_NAME
-    assert shim.exists() and "coolify-cockpit\", \"tick\"" in shim.read_text()
+    assert shim.exists() and "coolifybruecke\", \"tick\"" in shim.read_text()
     assert out["replaced"] == [] and cron.jobs[-1]["no_agent"] is True and cron.jobs[-1]["script"] == shim.name
     out = m.pkg.alerts_on("15m", "telegram", home=tmp_path)
     assert out["replaced"] == ["job2"] and [j["id"] for j in cron.jobs] == ["other", "job2"]
@@ -192,18 +192,30 @@ def test_alerts_on_is_idempotent_and_off_removes_job_and_script(m, tmp_path, mon
     assert m.pkg.alerts_status(tmp_path, jobs=cron.jobs)["on"] is False
 
 
+def test_alerts_on_replaces_the_0_1_0_job_and_deletes_its_shim(m, tmp_path, monkeypatch):
+    cron = FakeCron()
+    cron.jobs.append({"id": "old", "name": "Coolify Cockpit alerts", "script": m.alerts.OLD_SCRIPT_NAME, "enabled": True})
+    old_shim = tmp_path / "scripts" / m.alerts.OLD_SCRIPT_NAME
+    old_shim.parent.mkdir()
+    old_shim.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(m.pkg, "_cron_jobs", lambda: cron)
+    out = m.pkg.alerts_on("5m", "local", home=tmp_path)
+    assert out["replaced"] == ["old"] and [j["name"] for j in cron.jobs] == ["Coolifybrücke alerts"]
+    assert not old_shim.exists() and sorted(p.name for p in old_shim.parent.iterdir()) == ["coolifybruecke-alerts.py"]
+
+
 def test_the_shim_runs_the_tick_and_passes_its_output_through(m, tmp_path):
     shim = m.alerts.write_shim(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     hermes = fake_bin / "hermes"
-    hermes.write_text("#!/bin/sh\n[ \"$1 $2\" = \"coolify-cockpit tick\" ] && echo 'Coolify Cockpit · h' && exit 0\nexit 3\n")
+    hermes.write_text("#!/bin/sh\n[ \"$1 $2\" = \"coolifybruecke tick\" ] && echo 'Coolifybrücke · h' && exit 0\nexit 3\n")
     hermes.chmod(0o755)
     import os
     import subprocess
     run = subprocess.run([sys.executable, str(shim)], capture_output=True, text=True,
                          env={**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"})
-    assert run.returncode == 0 and run.stdout == "Coolify Cockpit · h\n"
+    assert run.returncode == 0 and run.stdout == "Coolifybrücke · h\n"
 
 
 def test_cli_parser_and_handler(m, tmp_path, monkeypatch):

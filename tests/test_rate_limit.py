@@ -116,16 +116,16 @@ class Coolify:
 
 
 def settings(key, default=None):
-    return {"COOLIFY_COCKPIT_URL": BASE, "check_updates": False}.get(key, default)
+    return {"COOLIFYBRUECKE_URL": BASE, "check_updates": False}.get(key, default)
 
 
-secrets = {"COOLIFY_COCKPIT_TOKEN": "tok-act", "COOLIFY_COCKPIT_READ_TOKEN": "tok-read"}.get
+secrets = {"COOLIFYBRUECKE_TOKEN": "tok-act", "COOLIFYBRUECKE_READ_TOKEN": "tok-read"}.get
 
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
     """The profile's plugin host (serves the page's routes) with its plugin data dir."""
-    module = load("coolify_cockpit_rl_host")
+    module = load("coolifybruecke_rl_host")
     monkeypatch.setattr(module, "_default_data_dir", lambda: tmp_path)
     monkeypatch.setattr(module, "_default_cache_file", lambda: tmp_path / "snapshot-cache.json")
     module._CAPABILITIES_CACHES.clear()
@@ -215,7 +215,7 @@ def test_a_snapshot_that_met_a_429_is_not_kept(host):
 # --- one capabilities check for every caller -----------------------------------------------------
 
 def test_the_capabilities_check_is_shared_by_the_tool_and_the_page_in_another_process(host, tmp_path, monkeypatch):
-    gateway = load("coolify_cockpit_rl_gateway")
+    gateway = load("coolifybruecke_rl_gateway")
     monkeypatch.setattr(gateway, "_default_data_dir", lambda: tmp_path)
     gateway._CAPABILITIES_CACHES.clear()
     fake = Coolify(host)

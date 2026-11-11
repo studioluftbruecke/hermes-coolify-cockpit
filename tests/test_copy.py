@@ -42,7 +42,7 @@ def test_settings_entry_has_the_sidebar_name_and_icon():
     page = re.search(r"ctx\.registerSettingsPage\(\{ id: '[a-z-]+', title: NAV_LABEL, icon: '([a-z-]+)'", js)
     assert page, "the settings entry must be registered with the sidebar's NAV_LABEL"
     assert page.group(1) == nav.group(1), (page.group(1), nav.group(1))
-    assert re.search(r"^const NAV_LABEL = 'Coolify Cockpit'$", js, re.M)
+    assert re.search(r"^const NAV_LABEL = 'Coolifybrücke'$", js, re.M)
 
 
 # --- 0.1.0 M8: no sentence over 120 characters in the shipped copy ------------------------------
@@ -74,7 +74,7 @@ def test_no_sentence_over_120_characters_in_the_registries():
     import importlib
     import importlib.util
     import sys
-    name = "coolify_cockpit_copy_under_test"
+    name = "coolifybruecke_copy_under_test"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
         module = importlib.util.module_from_spec(spec)

@@ -359,7 +359,7 @@ def test_routes_put_and_preset_use_compare_and_set(plugin, store):
 
 def test_route_availability_joins_the_setup_feature_lists(plugin, store, kit):
     fake = kit.FakeCoolify({"tok-action": "scoped_read_deploy"})
-    secrets = {"COOLIFY_COCKPIT_TOKEN": "tok-action"}.get
+    secrets = {"COOLIFYBRUECKE_TOKEN": "tok-action"}.get
     status, body = plugin.api_layout_get(store, availability=True, get_setting=kit.settings(),
                                          get_secret=secrets, transport=fake)
     assert status == 200
@@ -415,7 +415,7 @@ def test_dashboard_layout_routes_reach_the_store(monkeypatch, plugin, store):
     monkeypatch.setitem(sys.modules, "fastapi", fastapi)
     monkeypatch.setitem(sys.modules, "fastapi.responses", responses)
     root = pathlib.Path(plugin.__file__).resolve().parent
-    spec = importlib.util.spec_from_file_location("coolify_cockpit_layout_api_under_test",
+    spec = importlib.util.spec_from_file_location("coolifybruecke_layout_api_under_test",
                                                   root / "dashboard" / "plugin_api.py")
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
@@ -449,7 +449,7 @@ def test_the_registered_tool_text_names_every_widget_type_with_its_label(plugin,
         assert f'{t.type} ("{t.label}")' in text, t.type
     assert 'chat ("Cockpit chat")' in text and 'notebook ("Instance notebook")' in text
     assert "{widget_types}" not in text
-    assert "coolify-cockpit:coolify-cockpit" in text
+    assert "coolifybruecke:coolifybruecke" in text
     assert "position 0 for the top" in text
     assert len(text) < 3000
 

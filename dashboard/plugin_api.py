@@ -1,4 +1,4 @@
-"""Backend routes for the Coolify Cockpit pane, mounted at `/api/plugins/coolify-cockpit/`.
+"""Backend routes for the Coolifybrücke pane, mounted at `/api/plugins/coolifybruecke/`.
 
     GET /setup                            which settings are filled in (no Coolify request, no token value)
     GET /capabilities                     the token setup report (same as coolify_capabilities),
@@ -17,7 +17,7 @@
 
 The handlers are the plugin's own `api_*` functions; this file only adapts them to FastAPI. Hermes
 loads it as a standalone module, so the plugin folder is loaded here as a package by path. Settings
-come from the profile config (`plugins.entries.coolify-cockpit.settings`), secrets from Hermes'
+come from the profile config (`plugins.entries.coolifybruecke.settings`), secrets from Hermes'
 secret scope (`get_secret`). Every route but `POST /actions` only reads from Coolify; that one is
 the user's own click (the pane confirms it first) and runs with the API token only, after the
 same rights and view checks the agent's tool runs.
@@ -39,9 +39,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse
 
-PLUGIN = "coolify-cockpit"
+PLUGIN = "coolifybruecke"
 _HOST_PROCESS_ENV = "HERMES_PLUGIN_HOST_PROCESS"  # set by Hermes in a plugin host process
-_PACKAGE = "hermes_coolify_cockpit_dashboard"
+_PACKAGE = "hermes_coolifybruecke_dashboard"
 
 router = APIRouter()
 
@@ -79,7 +79,7 @@ def _get_secret(name: str) -> Optional[str]:
     for that profile. Everywhere else the request already runs in a fresh profile scope."""
     from agent.secret_scope import get_secret
 
-    if os.environ.get(_HOST_PROCESS_ENV) == "1" and name.startswith("COOLIFY_COCKPIT_"):
+    if os.environ.get(_HOST_PROCESS_ENV) == "1" and name.startswith("COOLIFYBRUECKE_"):
         try:
             from agent.secret_scope import build_profile_secret_scope
             from hermes_constants import get_hermes_home

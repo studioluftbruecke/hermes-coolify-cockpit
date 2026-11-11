@@ -20,7 +20,7 @@ BASE_URL = "https://coolify.example.test"
 
 
 def load_plugin():
-    name = "coolify_cockpit_under_test"
+    name = "coolifybruecke_under_test"
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(
@@ -79,7 +79,7 @@ class FakeCoolify:
 def own_hermes_home(tmp_path_factory, monkeypatch):
     """A fresh profile home per test. With Hermes importable (check.sh puts its source on
     PYTHONPATH), the plugin keeps its capability check and notebook in
-    `<HERMES_HOME>/plugin-data/coolify-cockpit/`, so a shared home lets one test's cached check
+    `<HERMES_HOME>/plugin-data/coolifybruecke/`, so a shared home lets one test's cached check
     answer the next test's report. Kept out of `tmp_path`, which some tests list. The caller's
     session platform is cleared too: an agent shell sets HERMES_SESSION_PLATFORM, which the run
     context falls back to when a test's session has no surface."""
@@ -107,7 +107,7 @@ class Kit:
         self.client = importlib.import_module(self.plugin.__name__ + ".coolify_client")
 
     def settings(self, url=BASE_URL, check_updates=True):
-        values = {"COOLIFY_COCKPIT_URL": url, "check_updates": check_updates}
+        values = {"COOLIFYBRUECKE_URL": url, "check_updates": check_updates}
         return lambda key, default=None: values.get(key, default)
 
     def report(self, action=None, read=None, *, check_updates=True, unreachable=False, url=BASE_URL):
@@ -121,8 +121,8 @@ class Kit:
         if read:
             tokens[f"tok-read-{read}"] = read
         fake = FakeCoolify(tokens, unreachable=unreachable)
-        secrets = {"COOLIFY_COCKPIT_TOKEN": f"tok-action-{action}" if action else None,
-                   "COOLIFY_COCKPIT_READ_TOKEN": f"tok-read-{read}" if read else None}
+        secrets = {"COOLIFYBRUECKE_TOKEN": f"tok-action-{action}" if action else None,
+                   "COOLIFYBRUECKE_READ_TOKEN": f"tok-read-{read}" if read else None}
         out = self.plugin.capabilities_report(self.settings(url, check_updates), secrets.get, transport=fake)
         return out, fake
 

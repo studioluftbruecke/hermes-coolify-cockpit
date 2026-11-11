@@ -39,7 +39,7 @@ from typing import Any, Callable, Mapping, Optional
 DEFAULT_TIMEOUT = 15.0
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MCP_PROTOCOL_VERSION = "2025-11-25"
-USER_AGENT = "hermes-coolify-cockpit"
+USER_AGENT = "hermes-coolifybruecke"
 RATE_LIMIT_NOTE = ("Coolify allows API_RATE_LIMIT requests per minute (200 by default) per Coolify user, "
                    "shared by all of that user's tokens.")
 

@@ -65,7 +65,7 @@ _LOADED = {}
 def _plugin():
     if "pkg" not in _LOADED:
         root = pathlib.Path(__file__).resolve().parents[1]
-        name = "coolify_cockpit_m2_under_test"
+        name = "coolifybruecke_m2_under_test"
         spec = importlib.util.spec_from_file_location(name, root / "__init__.py",
                                                       submodule_search_locations=[str(root)])
         module = importlib.util.module_from_spec(spec)
@@ -84,12 +84,12 @@ def m2():
 
 
 def settings(url=BASE):
-    values = {"COOLIFY_COCKPIT_URL": url}
+    values = {"COOLIFYBRUECKE_URL": url}
     return lambda key, default=None: values.get(key, default)
 
 
 def secrets(action=None, read=None):
-    values = {"COOLIFY_COCKPIT_TOKEN": action, "COOLIFY_COCKPIT_READ_TOKEN": read}
+    values = {"COOLIFYBRUECKE_TOKEN": action, "COOLIFYBRUECKE_READ_TOKEN": read}
     return values.get
 
 
@@ -166,10 +166,10 @@ def test_counting_transport_refuses_any_write(m2):
 def test_single_scoped_token_names_the_missing_server_data(m2):
     inst = Instance({"tok-action": "scoped"})
     snap = build(m2, inst, read=None)
-    assert snap["source"] == {"role": "single", "setting": "COOLIFY_COCKPIT_TOKEN",
+    assert snap["source"] == {"role": "single", "setting": "COOLIFYBRUECKE_TOKEN",
                               "fingerprint": snap["source"]["fingerprint"], "scope": "scoped"}
     assert snap["servers"] == []
-    assert any("scoped tokens cannot read servers" in x and "COOLIFY_COCKPIT_READ_TOKEN" in x for x in snap["limits"])
+    assert any("scoped tokens cannot read servers" in x and "COOLIFYBRUECKE_READ_TOKEN" in x for x in snap["limits"])
     assert [(r["name"], r["environment"]) for r in snap["resources"]] == [("shop-web-staging", "staging")]
     assert [d["uuid"] for d in snap["latest_deployments"]] == ["dep-fail-2", "dep-fail-1", "dep-ok-1"]
     row = snap["fleet"]["app-shop-staging"]
@@ -210,7 +210,7 @@ def test_mcp_off_keeps_the_rest_and_says_what_is_missing(m2):
 
 def test_no_usable_token_raises_with_the_setting_to_fix(m2):
     inst = Instance({"tok-action": "rejected"})
-    with pytest.raises(m2.snap.SnapshotUnavailable, match="COOLIFY_COCKPIT_TOKEN.*401"):
+    with pytest.raises(m2.snap.SnapshotUnavailable, match="COOLIFYBRUECKE_TOKEN.*401"):
         build(m2, inst, read=None)
     with pytest.raises(m2.snap.SnapshotUnavailable, match="did not answer"):
         build(m2, Instance({}, unreachable=True), read=None)
@@ -468,8 +468,8 @@ def test_plugin_api_mounts_the_routes(monkeypatch):
     _fake_fastapi(monkeypatch)
     root = pathlib.Path(__file__).resolve().parents[1]
     manifest = json.loads((root / "dashboard" / "manifest.json").read_text())
-    assert manifest["name"] == "coolify-cockpit" and manifest["api"] == "plugin_api.py"
-    spec = importlib.util.spec_from_file_location("coolify_cockpit_api_under_test", root / "dashboard" / "plugin_api.py")
+    assert manifest["name"] == "coolifybruecke" and manifest["api"] == "plugin_api.py"
+    spec = importlib.util.spec_from_file_location("coolifybruecke_api_under_test", root / "dashboard" / "plugin_api.py")
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
     assert sorted(api.router.routes) == ["/actions", "/alerts", "/capabilities", "/layout", "/notes",
@@ -502,8 +502,8 @@ def test_setup_names_what_is_missing_and_never_a_token_value(m2):
 
 def test_routes_read_a_token_saved_after_the_plugin_host_started(monkeypatch):
     _fake_fastapi(monkeypatch)
-    profile_now = {"COOLIFY_COCKPIT_TOKEN": "saved-later"}
-    launch_env = {"COOLIFY_COCKPIT_READ_TOKEN": "removed-since", "OTHER": "x"}
+    profile_now = {"COOLIFYBRUECKE_TOKEN": "saved-later"}
+    launch_env = {"COOLIFYBRUECKE_READ_TOKEN": "removed-since", "OTHER": "x"}
     scope = types.ModuleType("agent.secret_scope")
     scope.build_profile_secret_scope = lambda home: dict(profile_now)
     scope.get_secret = lambda name: launch_env.get(name)
@@ -513,19 +513,19 @@ def test_routes_read_a_token_saved_after_the_plugin_host_started(monkeypatch):
     monkeypatch.setitem(sys.modules, "agent.secret_scope", scope)
     monkeypatch.setitem(sys.modules, "hermes_constants", consts)
     root = pathlib.Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("coolify_cockpit_api_secrets", root / "dashboard" / "plugin_api.py")
+    spec = importlib.util.spec_from_file_location("coolifybruecke_api_secrets", root / "dashboard" / "plugin_api.py")
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
 
     monkeypatch.setenv("HERMES_PLUGIN_HOST_PROCESS", "1")  # in a profile's plugin host
-    assert api._get_secret("COOLIFY_COCKPIT_TOKEN") == "saved-later"
-    assert api._get_secret("COOLIFY_COCKPIT_READ_TOKEN") is None  # removed from .env: gone at once
+    assert api._get_secret("COOLIFYBRUECKE_TOKEN") == "saved-later"
+    assert api._get_secret("COOLIFYBRUECKE_READ_TOKEN") is None  # removed from .env: gone at once
     assert api._get_secret("OTHER") == "x"  # other names keep Hermes' own lookup
-    profile_now["COOLIFY_COCKPIT_TOKEN"] = "rolled"
-    assert api._get_secret("COOLIFY_COCKPIT_TOKEN") == "rolled"
+    profile_now["COOLIFYBRUECKE_TOKEN"] = "rolled"
+    assert api._get_secret("COOLIFYBRUECKE_TOKEN") == "rolled"
 
     monkeypatch.delenv("HERMES_PLUGIN_HOST_PROCESS")  # in process: the request's own fresh scope
-    assert api._get_secret("COOLIFY_COCKPIT_READ_TOKEN") == "removed-since"
+    assert api._get_secret("COOLIFYBRUECKE_READ_TOKEN") == "removed-since"
 
 
 # --- 0.1.0 M2: the Attention list on a served snapshot -------------------------------------------

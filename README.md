@@ -1,11 +1,11 @@
-# Coolify Cockpit
+# Coolifybrücke
 
 See what needs you across your [Coolify](https://coolify.io) instance, deploy with your approval,
 and let Hermes explain failed deploys.
 
-![The Coolify Cockpit page in Hermes Desktop: what needs you, the latest deploys, the apps by environment and the server charts](docs/screenshot-1.png)
+![The Coolifybrücke page in Hermes Desktop: what needs you, the latest deploys, the apps by environment and the server charts](docs/screenshot-1.png)
 
-Version 0.1.0. MIT. Needs Hermes 0.23.0 or later. A Studio Luftbrücke
+Version 0.2.0. MIT. Needs Hermes 0.23.0 or later. A Studio Luftbrücke
 Hermes plugin. The full reference is in [docs/guide.md](docs/guide.md).
 
 ## What it does
@@ -31,17 +31,17 @@ Hermes plugin. The full reference is in [docs/guide.md](docs/guide.md).
 ## Install and update
 
 The plugin has two halves. The tools, routes and alerts run where the Hermes backend runs. Hermes
-Desktop loads the Cockpit page and the settings page from the computer it runs on, never from a
+Desktop loads the Coolifybrücke page and the settings page from the computer it runs on, never from a
 Hermes on a server. With Hermes on a server, install and update the plugin in both places, on the
 same version. With Hermes and Desktop on one computer, one install covers both.
 
 | Where | Install | Update |
 | --- | --- | --- |
-| Server: tools, routes, alerts | `hermes -p <profile> plugins install https://github.com/studioluftbruecke/hermes-coolify-cockpit --enable` | `hermes -p <profile> plugins update coolify-cockpit` |
-| Desktop computer: Cockpit page and settings page | `hermes plugins install https://github.com/studioluftbruecke/hermes-coolify-cockpit` | `hermes plugins update coolify-cockpit` |
+| Server: tools, routes, alerts | `hermes -p <profile> plugins install https://github.com/studioluftbruecke/hermes-coolifybruecke --enable` | `hermes -p <profile> plugins update coolifybruecke` |
+| Desktop computer: Coolifybrücke page and settings page | `hermes plugins install https://github.com/studioluftbruecke/hermes-coolifybruecke` | `hermes plugins update coolifybruecke` |
 
 - After either step on the Desktop computer: **Capabilities → Plugins → Rescan**. A new install's
-  Desktop half arrives switched off; switch on **coolify-cockpit** there.
+  Desktop half arrives switched off; switch on **coolifybruecke** there.
 - No Hermes on the Desktop computer: **Capabilities → Plugins → Install from Git** with the URL,
   **Agent plugin** and **Desktop UI** both selected. To update, the same with **Advanced → Force
   reinstall**. Desktop's **Update** button updates the server only.
@@ -53,12 +53,47 @@ same version. With Hermes and Desktop on one computer, one install covers both.
   custom (unreviewed) source". This plugin passes the scan, so `--force` is not needed. `--ref`
   with a full commit SHA pins the install.
 
+## Upgrading from Coolify Cockpit 0.1.0
+
+0.2.0 renames the plugin to Coolifybrücke: plugin `coolifybruecke`, settings `COOLIFYBRUECKE_*`,
+command `hermes coolifybruecke`, skill `coolifybruecke:coolifybruecke`. It does not read the old
+`COOLIFY_COCKPIT_*` settings, so you enter the URL and the token again under the new names. Your
+layout and your notebook (`COOLIFY.md`) come along: on first use 0.2.0 copies the files of
+`plugin-data/coolify-cockpit/` into `plugin-data/coolifybruecke/` and leaves the old folder as it is.
+
+Run these where 0.1.0 is installed (on the server with `-p <profile>`, on the Desktop computer
+without):
+
+```bash
+hermes -p <profile> plugins remove coolify-cockpit
+hermes -p <profile> plugins install https://github.com/studioluftbruecke/hermes-coolifybruecke --enable
+```
+
+`hermes plugins update coolify-cockpit`, the update command of 0.1.0, does not move you to 0.2.0.
+Hermes stops with "The updated plugin changed its installed name; reinstall it explicitly." and
+keeps 0.1.0 installed and enabled. Run the two commands above instead.
+
+Then:
+
+1. Enter the Coolify URL and the API token again in **Settings → Plugins → Coolifybrücke** (or as
+   the [guide](docs/guide.md#configure-without-hermes-desktop) shows, with the new names).
+2. If alerts were on: `hermes -p <profile> coolifybruecke alerts on`. It replaces the 0.1.0 job and
+   deletes the old `coolify-cockpit-alerts.py`, so one job named "Coolifybrücke alerts" remains.
+3. If you made a morning digest from the blueprint, delete that job and create it once more from
+   the blueprint "Coolify morning digest": the old job names the old skill.
+4. In Hermes Desktop: **Capabilities → Plugins → Rescan**, switch on **coolifybruecke**, and open
+   **Coolifybrücke** in the sidebar. A tab still open on the old page shows nothing until you
+   reload Desktop.
+5. Restart the gateway (`hermes gateway restart`, or quit and reopen Hermes Desktop when Desktop
+   runs it). A gateway that loaded 0.1.0 keeps its hooks and its `@coolify:` reference until then,
+   and that old reference finds no URL under the old setting names.
+
 ## First use
 
 1. In Coolify, open **Settings → Advanced** and enable **API access** and the **MCP server**.
    Then create a token in **Keys & Tokens → API tokens** with `read` and `deploy` on all projects.
    Leave `read:sensitive`, `write` and `delete` off.
-2. In Hermes Desktop, open **Coolify Cockpit** in the sidebar. Click **Enter URL**, then **Paste
+2. In Hermes Desktop, open **Coolifybrücke** in the sidebar. Click **Enter URL**, then **Paste
    token**. The page picks up the saved values within a few seconds and shows one result line, for
    example "Team-wide · read, deploy · 28 apps · 2 servers".
 3. Ask Hermes "what needs me on Coolify?" in a new chat. Without Desktop, set the values as the
@@ -68,21 +103,21 @@ same version. With Hermes and Desktop on one computer, one install covers both.
 
 ## Settings
 
-All settings sit in **Settings → Plugins → Coolify Cockpit**. Tokens go to the profile's `.env`,
+All settings sit in **Settings → Plugins → Coolifybrücke**. Tokens go to the profile's `.env`,
 the rest to its `config.yaml`.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| Coolify URL (`COOLIFY_COCKPIT_URL`) | The address you open Coolify at | none |
-| API token (`COOLIFY_COCKPIT_TOKEN`) | Reads and acts. Recommended: `read` and `deploy`, all projects | none |
+| Coolify URL (`COOLIFYBRUECKE_URL`) | The address you open Coolify at | none |
+| API token (`COOLIFYBRUECKE_TOKEN`) | Reads and acts. Recommended: `read` and `deploy`, all projects | none |
 | Protected environments (`protected_environments`) | Comma-separated. The agent may not act there; your own clicks work | `production` |
 | Agent may act on protected environments (`agent_on_protected`) | On: each agent action there still asks you, naming the environment | off |
 | Let the agent run actions (`agent_actions`) | Off: only your own clicks act | on |
 | Disk warning at (%) (`disk_warn_percent`) | A server at or over this disk use needs attention | 85 |
 | Memory warning at (%) (`memory_warn_percent`) | A server at or over this memory use needs attention | 90 |
 | Check for Coolify updates (`check_updates`) | Compares your version with Coolify's release feed | on |
-| Read-only token (`COOLIFY_COCKPIT_READ_TOKEN`) | Optional. Only when the API token is limited to some projects: a team-wide `read` token shows servers and every app. Never acts | none |
-| Git host token (`COOLIFY_COCKPIT_GIT_TOKEN`) | Optional. Read-only, for "branch ahead" on private repositories without Forgebrücke | none |
+| Read-only token (`COOLIFYBRUECKE_READ_TOKEN`) | Optional. Only when the API token is limited to some projects: a team-wide `read` token shows servers and every app. Never acts | none |
+| Git host token (`COOLIFYBRUECKE_GIT_TOKEN`) | Optional. Read-only, for "branch ahead" on private repositories without Forgebrücke | none |
 | Git host of that token (`git_host`) | Where the git host token is sent. Empty: GitHub only | none |
 
 Which token setups unlock what, and the tool list: [docs/guide.md](docs/guide.md).
@@ -97,7 +132,7 @@ Which token setups unlock what, and the tool list: [docs/guide.md](docs/guide.md
   reply that contains such a reference. In the composer a reference shows as plain text, not as a
   chip.
 - **Disabling the plugin stops every action at once.** After `hermes plugins disable
-  coolify-cockpit`, Hermes keeps the hooks the plugin already registered (the approval check for
+  coolifybruecke`, Hermes keeps the hooks the plugin already registered (the approval check for
   `coolify_action`) until the gateway restarts. The tools are gone, so no action can run.
 - **Approvals.** When the agent calls `coolify_action`, Hermes shows its approval prompt before
   anything is sent. Cron jobs, webhooks, the API server and single-query `hermes chat -q` or `-z`
@@ -130,7 +165,7 @@ The snapshot and history code accepts only `GET` requests and the MCP tools `get
 and `list_deployments`; a guard refuses anything else. The env check reads only the timestamps of
 the answer and stores no value.
 
-**Coolify's API rate limit.** Coolify allows `API_RATE_LIMIT` requests per minute (200 by default) per Coolify user, shared by every token of that user, with 403 and 404 answers counted too (MCP calls are not). An open Cockpit page with its chip used about 80 in the minute it opened, about 6 per minute while idle (56 in the minute of the 5-minute token check) and about 36 per minute while it followed a deployment, measured with 0.0.10 against an instance with 23 projects and 50 resources. 0.1.0 adds the deployment lists as MCP calls, which do not count, and the env checks, which do: each app once every 10 minutes, at most 6 per snapshot. When Coolify answers 429 the plugin says "Coolify is limiting API requests; try again in N s" and never retries on its own.
+**Coolify's API rate limit.** Coolify allows `API_RATE_LIMIT` requests per minute (200 by default) per Coolify user, shared by every token of that user, with 403 and 404 answers counted too (MCP calls are not). An open Coolifybrücke page with its chip used about 80 in the minute it opened, about 6 per minute while idle (56 in the minute of the 5-minute token check) and about 36 per minute while it followed a deployment, measured with 0.0.10 against an instance with 23 projects and 50 resources. 0.1.0 adds the deployment lists as MCP calls, which do not count, and the env checks, which do: each app once every 10 minutes, at most 6 per snapshot. When Coolify answers 429 the plugin says "Coolify is limiting API requests; try again in N s" and never retries on its own.
 
 How rights are detected: Coolify checks a token's right before it looks up the resource, so the
 right probes go to the made-up id `hermes-permission-probe-does-not-exist`. No real resource
@@ -148,11 +183,11 @@ commit changes, at most 8 apps per served snapshot and 40 per alert tick:
 | Source | Request | Credential |
 | --- | --- | --- |
 | Forgebrücke (enabled in the same profile, repository on its host) | No request by the cockpit: an in-process call of Forgebrücke's tool `forgejo_get` with `kind=branch`, made only by the alert tick and the agent's tool calls. Forgebrücke then asks its Forgejo | Forgebrücke's own token; the cockpit never sees it |
-| Git host token (repository on `git_host`, or on github.com for a GitHub-style token when `git_host` is empty) | `GET https://<host>/api/v1/repos/<owner>/<repo>/branches/<branch>` and `.../compare/<deployed>...<head>` (Forgejo or Gitea), or the same paths on `https://api.github.com` | `COOLIFY_COCKPIT_GIT_TOKEN`, sent to that one host only |
+| Git host token (repository on `git_host`, or on github.com for a GitHub-style token when `git_host` is empty) | `GET https://<host>/api/v1/repos/<owner>/<repo>/branches/<branch>` and `.../compare/<deployed>...<head>` (Forgejo or Gitea), or the same paths on `https://api.github.com` | `COOLIFYBRUECKE_GIT_TOKEN`, sent to that one host only |
 | Any other repository host | `GET https://<host>/<owner>/<repo>.git/info/refs?service=git-upload-pack` | None. A private repository answers 401 and is asked again after 6 hours |
 
 The hosts are the ones in your applications' `git_repository` fields as Coolify stores them. The
-request carries the user agent `hermes-coolify-cockpit` and no instance data.
+request carries the user agent `hermes-coolifybruecke` and no instance data.
 
 ### When the calls happen
 
@@ -173,7 +208,7 @@ request carries the user agent `hermes-coolify-cockpit` and no instance data.
   every 5 minutes, and the layout (every 15 seconds), the notebook (every 60 seconds) and the
   alert job's state (every 60 seconds, on the settings page), which are files on the Hermes
   backend and call no Coolify endpoint.
-- With alerts on, the cron job runs `hermes coolify-cockpit tick` at the interval you chose
+- With alerts on, the cron job runs `hermes coolifybruecke tick` at the interval you chose
   (default every 5 minutes), whether Desktop is open or not. Each tick reads a fresh snapshot plus
   up to 40 env and branch answers.
 
@@ -189,7 +224,7 @@ needs (see Setup).
 
 The git host token is sent only to `git_host`, or to github.com when `git_host` is empty and the
 token starts like a GitHub token; otherwise it is sent nowhere. The alert script reads no token: it
-starts `hermes coolify-cockpit tick`, which reads the tokens through Hermes.
+starts `hermes coolifybruecke tick`, which reads the tokens through Hermes.
 
 ### Actions
 
@@ -220,7 +255,7 @@ provider like any other tool result, and its text goes to the digest's delivery 
 ### Files
 
 Everything the plugin writes lives in its data directory in the Hermes profile
-(`plugin-data/coolify-cockpit/`), except the alert script:
+(`plugin-data/coolifybruecke/`), except the alert script:
 
 | File | Holds |
 | --- | --- |
@@ -236,7 +271,7 @@ Everything the plugin writes lives in its data directory in the Hermes profile
 | `server-metrics.json` | Server chart series for the 6 h, 24 h and 7 d ranges |
 | `branch-heads.json` | Per app: repository, host, branch, deployed commit, branch head, commit count when known, source and check time |
 | `alerts-state.json` | The alert job's open and pending items (signal, title, app or server id, times), keyed by the instance URL |
-| `<profile>/scripts/coolify-cockpit-alerts.py` | The alert script. Written by `hermes coolify-cockpit alerts on`, removed by `alerts off` |
+| `<profile>/scripts/coolifybruecke-alerts.py` | The alert script. Written by `hermes coolifybruecke alerts on`, removed by `alerts off` |
 
 `alerts on` also adds one job to Hermes' own cron job list, and `alerts off` removes it.
 
@@ -255,19 +290,19 @@ chat's session id per profile, in Hermes Desktop's plugin storage. Links open in
 ### Not included
 
 No telemetry or analytics, no inbound port, no background process of its own. The plugin runs no
-shell command; the alert script it writes for `alerts on` starts `hermes coolify-cockpit tick` when
+shell command; the alert script it writes for `alerts on` starts `hermes coolifybruecke tick` when
 Hermes' cron runs it. No backup signal (see [the guide](docs/guide.md#what-needs-you-the-attention-list)).
 
 ## Uninstall
 
 ```bash
-hermes coolify-cockpit alerts off          # only if you turned alerts on
-hermes -p <profile> plugins remove coolify-cockpit
+hermes coolifybruecke alerts off          # only if you turned alerts on
+hermes -p <profile> plugins remove coolifybruecke
 ```
 
 On the Desktop computer, remove the package in **Capabilities → Plugins** (or run
-`hermes plugins remove coolify-cockpit` there). The plugin's data folder
-(`plugin-data/coolify-cockpit/` in the profile) stays until you delete it.
+`hermes plugins remove coolifybruecke` there). The plugin's data folder
+(`plugin-data/coolifybruecke/` in the profile) stays until you delete it.
 
 ## Contributing
 
@@ -277,3 +312,9 @@ lands: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT, see `LICENSE`.
+
+## Disclaimer
+
+Coolifybrücke is an independent, open-source plugin by Studio Luftbrücke. It is not made,
+endorsed or sponsored by coolLabs or the Coolify project. Coolify is a trademark of coolLabs.
+The name is used only to say which software the plugin works with.

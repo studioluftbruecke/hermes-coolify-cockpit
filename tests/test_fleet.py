@@ -15,7 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def _load():
-    name = "coolify_cockpit_fleet_under_test"
+    name = "coolifybruecke_fleet_under_test"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
         module = importlib.util.module_from_spec(spec)
@@ -234,7 +234,7 @@ def test_env_refresh_skips_deploying_apps_and_caps_reads(m):
 # --- 0.1.0 M4: server ranges and the disk estimate (servers.py) --------------------------------
 
 def _srv():
-    return importlib.import_module("coolify_cockpit_fleet_under_test.servers")
+    return importlib.import_module("coolifybruecke_fleet_under_test.servers")
 
 
 def week(start_pct, per_day, days=7, step_h=0.5, t0=1_794_000_000):

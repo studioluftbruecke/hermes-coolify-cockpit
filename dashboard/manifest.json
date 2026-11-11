@@ -1,11 +1,11 @@
 {
-  "name": "coolify-cockpit",
-  "label": "Coolify Cockpit",
-  "description": "Backend routes for the Coolify Cockpit pane: capabilities, snapshot, deployment history",
+  "name": "coolifybruecke",
+  "label": "Coolifybrücke",
+  "description": "Backend routes for the Coolifybrücke pane: capabilities, snapshot, deployment history",
   "icon": "Gauge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tab": {
-    "path": "/coolify-cockpit",
+    "path": "/coolifybruecke",
     "hidden": true
   },
   "api": "plugin_api.py"

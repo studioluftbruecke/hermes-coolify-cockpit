@@ -1,6 +1,6 @@
-name: coolify-cockpit
-version: "0.1.0"
-description: "Coolify Cockpit: see what needs you across your Coolify instance, deploy with your approval, and let Hermes explain failed deploys."
+name: coolifybruecke
+version: "0.2.0"
+description: "Coolifybrücke · a cockpit for Coolify: see what needs you across your Coolify instance, deploy with your approval, and let Hermes explain failed deploys."
 author: "Studio Luftbrücke"
 license: MIT
 requires_hermes: ">=0.23.0"
@@ -16,13 +16,13 @@ provides_hooks:
   - pre_tool_call
   - post_approval_response
 config_schema:
-  COOLIFY_COCKPIT_URL:
+  COOLIFYBRUECKE_URL:
     type: string
     label: "Coolify URL"
     description: "The address you open Coolify at, e.g. https://coolify.example.com"
-  COOLIFY_COCKPIT_TOKEN:
+  COOLIFYBRUECKE_TOKEN:
     type: secret
-    env: COOLIFY_COCKPIT_TOKEN
+    env: COOLIFYBRUECKE_TOKEN
     label: "API token"
     description: "Coolify: Keys & Tokens, API tokens. Recommended: read and deploy, all projects."
   protected_environments:
@@ -55,14 +55,14 @@ config_schema:
     default: true
     label: "Check for Coolify updates"
     description: "Compares your version with Coolify's release feed at cdn.coollabs.io."
-  COOLIFY_COCKPIT_READ_TOKEN:
+  COOLIFYBRUECKE_READ_TOKEN:
     type: secret
-    env: COOLIFY_COCKPIT_READ_TOKEN
+    env: COOLIFYBRUECKE_READ_TOKEN
     label: "Read-only token (optional)"
     description: "Only if your API token is limited to some projects: a team-wide read token shows servers and every app. Never acts."
-  COOLIFY_COCKPIT_GIT_TOKEN:
+  COOLIFYBRUECKE_GIT_TOKEN:
     type: secret
-    env: COOLIFY_COCKPIT_GIT_TOKEN
+    env: COOLIFYBRUECKE_GIT_TOKEN
     label: "Git host token (optional)"
     description: "Read-only, for private repos without Forgebrücke: shows when a branch is ahead of what runs."
   git_host:
