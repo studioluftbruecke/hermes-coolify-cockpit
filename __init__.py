@@ -900,8 +900,10 @@ def _session_env(name: str) -> str:
 
 
 def _finite_turn() -> bool:
+    # Kept on purpose: a `chat -q` / `-z` turn admitted by a running gateway carries its one-shot fact
+    # only here, never in HERMES_SINGLE_QUERY_SESSION (Hermes' own tools/approval_context.py reads both).
     try:
-        from gateway.session_finite import finite_turn_required  # set for `chat -q` / `-z` turns
+        from gateway.session_finite import finite_turn_required
     except Exception:
         return False
     try:
@@ -1897,16 +1899,77 @@ def tick_report(get_setting: SettingGetter, get_secret: SecretGetter, *, peek: b
     return alerts.render(new, recovered, host=host), facts
 
 
-def _cron_jobs():
-    from cron import jobs as cron_jobs  # Hermes' own scheduler store, the active profile's
-    return cron_jobs
+class CronCliError(RuntimeError):
+    pass
+
+
+class _CronCli:
+    """Hermes' scheduler through its public CLI: `hermes cron list --all`, `create` and `remove`,
+    run as a child process (an argument list, no shell) for the profile at `home`."""
+
+    TIMEOUT_S = 60
+
+    def __init__(self, home: Any):
+        self.home = str(home)
+
+    @staticmethod
+    def _hermes() -> str:
+        import shutil
+        import sys
+        from pathlib import Path
+        found = shutil.which("hermes")
+        if found:
+            return found
+        beside = Path(sys.executable).with_name("hermes")  # a venv install keeps it beside its Python
+        if beside.exists():
+            return str(beside)
+        raise CronCliError("the `hermes` command is not on PATH")
+
+    def _run(self, *args: str) -> str:
+        import os
+        import subprocess
+        try:
+            run = subprocess.run([self._hermes(), "cron", *args], capture_output=True, text=True,
+                                 timeout=self.TIMEOUT_S, env={**os.environ, "HERMES_HOME": self.home})
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise CronCliError(f"`hermes cron {args[0]}` did not run: {error}") from error
+        if run.returncode != 0:
+            lines = [ln.rstrip() for ln in (run.stdout + "\n" + run.stderr).splitlines() if ln.strip()]
+            start = next((i for i, ln in enumerate(lines) if ln.startswith("Failed to")), None)
+            reason = "\n".join(lines[start:]) if start is not None else (lines[-1] if lines else "no output")
+            raise CronCliError(f"`hermes cron {args[0]}` failed: {reason}")
+        return run.stdout
+
+    def list_jobs(self) -> list[dict]:
+        return _alerts().parse_cron_list(self._run("list", "--all"))
+
+    def create_job(self, every: str, *, name: str, deliver: str, script: str) -> dict:
+        out = self._run("create", every, "--no-agent", "--script", script, "--name", name, "--deliver", deliver)
+        job = _alerts().parse_created_job(out)
+        if not job:
+            raise CronCliError("`hermes cron create` did not report a job id")
+        return {**job, "deliver": deliver}
+
+    def remove_job(self, job_id: str) -> None:
+        self._run("remove", job_id)
+
+
+def _profile_home(home: Any = None) -> Any:
+    if home is None:
+        from hermes_constants import get_hermes_home
+        home = get_hermes_home()
+    return home
+
+
+def _cron(home: Any = None) -> _CronCli:
+    return _CronCli(_profile_home(home))
 
 
 def alerts_status(data_dir: Any = "default", *, jobs: Any = None, get_setting: Optional[SettingGetter] = None,
                   get_secret: Optional[SecretGetter] = None) -> dict:
     alerts = _alerts()
     try:
-        listed = jobs if jobs is not None else _cron_jobs().list_jobs(include_disabled=True)
+        listed = jobs if jobs is not None else _cron().list_jobs()
     except Exception:
         listed = []
     ours = alerts.our_jobs(listed)
@@ -1924,41 +1987,36 @@ def alerts_status(data_dir: Any = "default", *, jobs: Any = None, get_setting: O
 
 def alerts_on(every: str, deliver: str, *, home: Any = None) -> dict:
     """Write the shim and (re)create the one cron job that runs it. Idempotent: an earlier job of
-    the cockpit is replaced, so a second `alerts on` changes the cadence instead of adding a job."""
+    the cockpit is replaced, so a second `alerts on` changes the cadence instead of adding a job.
+    The new job is created first, so a schedule Hermes refuses leaves the earlier job running."""
     from pathlib import Path
     alerts = _alerts()
-    cron_jobs = _cron_jobs()
-    if home is None:
-        from hermes_constants import get_hermes_home
-        home = get_hermes_home()
-    script = alerts.write_shim(Path(home))
-    removed = []
-    for job in alerts.our_jobs(cron_jobs.list_jobs(include_disabled=True)):
-        cron_jobs.remove_job(job["id"])
-        removed.append(job["id"])
-    alerts.remove_old_shim(Path(home))
-    job = cron_jobs.create_job(None, every, name=alerts.JOB_NAME, deliver=deliver, script=script.name,
-                               no_agent=True)
+    home = Path(_profile_home(home))
+    cron = _cron(home)
+    script = alerts.write_shim(home)
+    earlier = [job["id"] for job in alerts.our_jobs(cron.list_jobs())]
+    job = cron.create_job(every, name=alerts.JOB_NAME, deliver=deliver, script=script.name)
+    for job_id in earlier:
+        cron.remove_job(job_id)
+    alerts.remove_old_shim(home)
     return {"job_id": job["id"], "schedule": job.get("schedule_display"), "deliver": job.get("deliver"),
-            "script": str(script), "replaced": removed}
+            "script": str(script), "replaced": earlier}
 
 
 def alerts_off(*, home: Any = None) -> dict:
     from pathlib import Path
     alerts = _alerts()
-    cron_jobs = _cron_jobs()
-    if home is None:
-        from hermes_constants import get_hermes_home
-        home = get_hermes_home()
+    home = Path(_profile_home(home))
+    cron = _cron(home)
     removed = []
-    for job in alerts.our_jobs(cron_jobs.list_jobs(include_disabled=True)):
-        cron_jobs.remove_job(job["id"])
+    for job in alerts.our_jobs(cron.list_jobs()):
+        cron.remove_job(job["id"])
         removed.append(job["id"])
-    script = Path(home) / "scripts" / alerts.SCRIPT_NAME
+    script = home / "scripts" / alerts.SCRIPT_NAME
     existed = script.exists()
     if existed:
         script.unlink()
-    existed = alerts.remove_old_shim(Path(home)) or existed
+    existed = alerts.remove_old_shim(home) or existed
     return {"removed_jobs": removed, "removed_script": existed}
 
 
@@ -1989,17 +2047,21 @@ def make_cli_handler(get_setting: SettingGetter, get_secret: SecretGetter = _def
             return 0 if facts.get("ok") or facts.get("error") in ("rate_limited", "not_configured") else 1
         if command == "alerts":
             sub = getattr(args, "alerts_command", None)
-            if sub == "on":
-                out = alerts_on(str(args.every), str(args.deliver))
-                print(f"Alerts on: {out['schedule']}, delivered to {out['deliver']} (job {out['job_id']}).")
-                if out["replaced"]:
-                    print(f"Replaced the earlier job {', '.join(out['replaced'])}.")
-                print("The first run lists everything that needs you now; after that only what is new or recovered.")
-                return 0
-            if sub == "off":
-                out = alerts_off()
-                print("Alerts off." if out["removed_jobs"] or out["removed_script"] else "Alerts were off.")
-                return 0
+            try:
+                if sub == "on":
+                    out = alerts_on(str(args.every), str(args.deliver))
+                    print(f"Alerts on: {out['schedule']}, delivered to {out['deliver']} (job {out['job_id']}).")
+                    if out["replaced"]:
+                        print(f"Replaced the earlier job {', '.join(out['replaced'])}.")
+                    print("The first run lists everything that needs you now; after that only what is new or recovered.")
+                    return 0
+                if sub == "off":
+                    out = alerts_off()
+                    print("Alerts off." if out["removed_jobs"] or out["removed_script"] else "Alerts were off.")
+                    return 0
+            except CronCliError as error:
+                print(f"Could not change the alert job: {error}\nCheck with: hermes cron list")
+                return 1
             status = alerts_status()
             if status["on"]:
                 age = status.get("last_check_age_s")

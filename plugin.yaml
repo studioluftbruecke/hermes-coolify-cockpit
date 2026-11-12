@@ -1,5 +1,5 @@
 name: coolifybruecke
-version: "0.2.1"
+version: "0.2.3"
 description: "Coolifybrücke · a cockpit for Coolify: see what needs you across your Coolify instance, deploy with your approval, and let Hermes explain failed deploys."
 author: "Studio Luftbrücke"
 license: MIT

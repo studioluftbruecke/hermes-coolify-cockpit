@@ -1053,7 +1053,7 @@ function NotAvailable({ row }) {
   return el(
     'div',
     { style: S.col(6) },
-    el(Note, { tone: 'warn', icon: 'lock' }, 'Not available with this token setup: ' + plain(row.reason || 'the setup was not checked') + '.'),
+    el(Note, { tone: 'warn', icon: 'lock' }, 'Not available: ' + plain(row.reason || 'the setup was not checked') + '.'),
     row.unlock ? el(Small, {}, 'To unlock it: ' + plain(row.unlock) + '.') : null
   )
 }

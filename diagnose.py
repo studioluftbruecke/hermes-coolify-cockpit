@@ -611,7 +611,7 @@ def fetch_deployment_log(connection: Any, deployment_uuid: str, *, transport: An
     summary = [{"role": t.role.value, "status": t.status.value,
                 "read_sensitive": t.abilities.get(caps.Ability.READ_SENSITIVE)} for t in tokens]
     if tokens and all(t.status is caps.TokenStatus.UNREACHABLE for t in tokens):
-        return None, _paste_answer("unreachable", f"The Coolify instance did not answer ({tokens[0].error}).",
+        return None, _paste_answer("unreachable", f"Coolify could not be reached ({tokens[0].error}).",
                                    tokens=summary)
     first = caps.route_reads(tokens, caps.Ability.READ_SENSITIVE)
     if first is None:

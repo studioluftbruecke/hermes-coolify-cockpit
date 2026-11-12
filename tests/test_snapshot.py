@@ -212,7 +212,7 @@ def test_no_usable_token_raises_with_the_setting_to_fix(m2):
     inst = Instance({"tok-action": "rejected"})
     with pytest.raises(m2.snap.SnapshotUnavailable, match="COOLIFYBRUECKE_TOKEN.*401"):
         build(m2, inst, read=None)
-    with pytest.raises(m2.snap.SnapshotUnavailable, match="did not answer"):
+    with pytest.raises(m2.snap.SnapshotUnavailable, match="could not be reached"):
         build(m2, Instance({}, unreachable=True), read=None)
 
 

@@ -1,0 +1,10 @@
+Created job: ddca34b3691c
+  Name: Coolifybrücke alerts
+  Schedule: every 5m
+  Script: coolifybruecke-alerts.py
+  Mode: no-agent (script stdout delivered directly)
+  Next run: 2026-11-12T10:49:08.818183+00:00
+  ⚠  Scheduler is not ready for profile 'default': no gateway serves it and no fresh ticker heartbeat.
+     If no gateway is running: hermes gateway install
+                    sudo hermes gateway install --system  # Linux servers
+     Check status:  hermes cron status

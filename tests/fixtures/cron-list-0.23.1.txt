@@ -1,0 +1,27 @@
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Scheduled Jobs (profile: default)               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  ddca34b3691c [paused]
+    Name:      Coolifybrücke alerts
+    Schedule:  every 5m
+    Repeat:    ∞
+    Next run:  2026-11-12T10:49:08.818183+00:00
+    Deliver:   telegram
+    Script:    coolifybruecke-alerts.py
+    Mode:      no-agent (script stdout delivered directly)
+
+  c2299df18e72 [active]
+    Name:      Nightly backup
+    Schedule:  0 9 * * *
+    Repeat:    ∞
+    Next run:  2026-11-13T09:00:00+00:00
+    Deliver:   local
+    Script:    backup.sh
+    Mode:      no-agent (script stdout delivered directly)
+
+  ⚠  Scheduler is not ready for profile 'default': no gateway serves it and no fresh ticker heartbeat.
+     If no gateway is running: hermes gateway install
+                    sudo hermes gateway install --system  # Linux servers
+     Check status:  hermes cron status

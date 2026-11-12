@@ -275,7 +275,7 @@ def holds_deploy(client: CoolifyClient, cache: AbilityCache = ABILITY_CACHE) -> 
             raise ActionRefused("unauthorized", "Coolify rejected the API token (401). Store a valid "
                                                 f"token as {ACTION_SETTING}.") from None
         elif error.kind is ErrorKind.UNREACHABLE:
-            raise ActionRefused("unreachable", f"The Coolify instance did not answer: {error.message}") from None
+            raise ActionRefused("unreachable", f"Coolify could not be reached: {error.message}") from None
         elif error.kind is ErrorKind.RATE_LIMITED:
             raise _rate_limited(error) from None
         else:
@@ -358,7 +358,7 @@ def _read_refusal(error: CoolifyError) -> ActionRefused:
         return ActionRefused("unauthorized", f"Coolify rejected the API token (401). Store a valid token "
                                              f"as {ACTION_SETTING}.")
     if error.kind is ErrorKind.UNREACHABLE:
-        return ActionRefused("unreachable", f"The Coolify instance did not answer: {error.message}")
+        return ActionRefused("unreachable", f"Coolify could not be reached: {error.message}")
     if error.kind is ErrorKind.FORBIDDEN:
         return ActionRefused("outside_action_view", "The API token cannot read resources (it lacks "
                                                     "`read`), so it cannot see any target.")

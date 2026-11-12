@@ -60,6 +60,13 @@ because the list says so.
 
 There is no backup signal. If the user asks about backups, say the cockpit does not check them.
 
+## Coolify could not be reached
+
+When a token's `status` is `unreachable` or the instance says `reachable: false`, no right was
+checked: the `error` names why. A 403 there ("a proxy or firewall in front of Coolify refuses this
+machine", "API is switched off", "allowed IPs") means the request never reached Coolify's token
+check. Tell the user that reason and its fix; never tell them to change the token's rights.
+
 ## Debug order: deployments, then details, logs last
 
 For "why did the last (staging) deploy fail?", at most three calls:

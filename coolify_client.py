@@ -3,7 +3,10 @@
 Every failure leaves as one typed `CoolifyError` whose `kind` says what went wrong, so callers
 branch on a value, not on status codes or exception classes:
 
-    unreachable     no HTTP answer (DNS, refused, TLS, timeout)
+    unreachable     no HTTP answer (DNS, refused, TLS, timeout), or a 403 that refused the request
+                    before Coolify checked the token: a proxy or firewall in front of Coolify
+                    (any 403 whose body is not JSON), Coolify's API switched off, or this machine
+                    outside Coolify's allowed IPs for the API
     unauthorized    401: the token was rejected
     forbidden       403 naming a missing right ("Missing required permissions: deploy");
                     `ability` carries the right
@@ -45,6 +48,28 @@ RATE_LIMIT_NOTE = ("Coolify allows API_RATE_LIMIT requests per minute (200 by de
 
 _MISSING_RIGHT = re.compile(r"missing required permissions?:\s*([a-z:_]+)", re.IGNORECASE)
 _SCOPE_REFUSAL = "limited to selected"
+# Coolify's API gate answers these before any token check (app/Http/Middleware/ApiAllowed.php and
+# ApiIpAllowed.php); every request then gets the same 403, so it says nothing about a right.
+_GATE_REFUSALS = {
+    "api is disabled.": "Coolify's API is switched off (Coolify answered \"API is disabled.\"); "
+                        "switch on API access in Coolify's settings",
+    "you are not allowed to access the api.": "Coolify's allowed IPs for the API do not include this "
+                                              "machine (Coolify answered \"You are not allowed to access "
+                                              "the API.\"); add its address in Coolify's settings",
+}
+
+
+def gate_refusal(payload: Any) -> Optional[str]:
+    """Why a 403 came from in front of Coolify's rights check, or None when Coolify's rights check
+    wrote it. Coolify answers its API in JSON; a 403 with any other body came from a proxy or
+    firewall in front of it (measured: an IP allow-list answering every path, `/api/health` too,
+    with the text `Forbidden`)."""
+    if isinstance(payload, dict):
+        return _GATE_REFUSALS.get(str(payload.get("message") or "").strip().lower())
+    said = str(payload or "").strip().replace("\n", " ")[:60]
+    quoted = f' "{said}"' if said else ""
+    return (f"the address answered HTTP 403{quoted} instead of Coolify's API: a proxy or firewall in front "
+            "of Coolify refuses this machine (an IP allow-list, for example); the token was never checked")
 
 
 class ErrorKind(str, Enum):
@@ -159,6 +184,9 @@ def error_for_status(status: int, payload: Any, method: str, path: str,
     if status == 401:
         return CoolifyError(ErrorKind.UNAUTHORIZED, message, status=status, method=method, path=path)
     if status == 403:
+        gate = gate_refusal(payload)
+        if gate is not None:
+            return CoolifyError(ErrorKind.UNREACHABLE, gate, status=status, method=method, path=path)
         if _SCOPE_REFUSAL in message.lower():
             return CoolifyError(ErrorKind.SCOPED_REFUSED, message, status=status, method=method, path=path)
         missing = _MISSING_RIGHT.search(message)

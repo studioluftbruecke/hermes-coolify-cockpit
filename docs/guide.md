@@ -411,7 +411,7 @@ layout}` saves the page's edit and answers 409 with the current layout when it c
 with `{text, topic?}` adds your entry. `POST /diagnose` with `{log_text}` (a pasted log) or
 `{deployment_uuid}` (fetched only with a `read:sensitive` token; otherwise the answer asks for a
 paste) returns the diagnosis card the page shows, with secrets masked. `GET /alerts` reads the alert
-job back (on or off, schedule, delivery, last check, open items) from Hermes' cron job list and
+job back (on or off, schedule, delivery, last check, open items) from `hermes cron list --all` and
 `alerts-state.json`, without a Coolify request.
 
 **A changed token is used at once, without a restart.** Chats read the token on every call. For a

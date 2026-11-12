@@ -510,9 +510,9 @@ def evaluate(rule: FeatureRule, tokens: list[TokenInfo], facts: InstanceFacts) -
              "visible_projects": max((len(t.sees.projects) for t in tokens if t.ok), default=0)}
 
     if not facts.reachable:
-        return missing(f"The Coolify instance did not answer ({facts.unreachable_reason})",
-                       f"check {URL_SETTING}, that the instance is up, and Coolify's allowed IPs "
-                       "(Settings → Advanced → API)")
+        return missing(f"Coolify could not be reached ({facts.unreachable_reason})",
+                       f"check {URL_SETTING}, that the instance is up, Coolify's allowed IPs "
+                       "(Settings → Advanced → API), and any proxy or firewall in front of Coolify")
     needs = rule.needs
     in_lane = [t for t in tokens if t.ok and (needs.lane is Lane.READ or t.role is not Role.OVERVIEW)]
     if not in_lane:
@@ -855,7 +855,7 @@ def result_line(model: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"line": "", "tone": "good", "limited": False, "add_read_token": False,
                            "rights": [], "chip": None, "chip_detail": None}
     if not instance.get("reachable", True):
-        return {**out, "line": "Coolify did not answer · check the URL", "tone": "bad"}
+        return {**out, "line": "Coolify could not be reached from here", "tone": "bad"}
     if main is None:
         main = read
     if main is None:

@@ -160,35 +160,34 @@ class FakeCron:
     def __init__(self):
         self.jobs = []
 
-    def list_jobs(self, include_disabled=False):
+    def list_jobs(self):
         return list(self.jobs)
 
-    def create_job(self, prompt, schedule, **kw):
-        job = {"id": f"job{len(self.jobs) + 1}", "prompt": prompt, "schedule_display": f"every {schedule}",
-               "enabled": True, **kw}
+    def create_job(self, every, *, name, deliver, script):
+        job = {"id": f"job{len(self.jobs) + 1}", "name": name, "schedule_display": f"every {every}",
+               "enabled": True, "deliver": deliver, "script": script}
         self.jobs.append(job)
         return job
 
     def remove_job(self, job_id):
         self.jobs = [j for j in self.jobs if j["id"] != job_id]
-        return True
 
 
 def test_alerts_on_is_idempotent_and_off_removes_job_and_script(m, tmp_path, monkeypatch):
     cron = FakeCron()
     cron.jobs.append({"id": "other", "script": "backup.py", "enabled": True})
-    monkeypatch.setattr(m.pkg, "_cron_jobs", lambda: cron)
+    monkeypatch.setattr(m.pkg, "_cron", lambda home=None: cron)
     out = m.pkg.alerts_on("5m", "local", home=tmp_path)
     shim = tmp_path / "scripts" / m.alerts.SCRIPT_NAME
     assert shim.exists() and "coolifybruecke\", \"tick\"" in shim.read_text()
-    assert out["replaced"] == [] and cron.jobs[-1]["no_agent"] is True and cron.jobs[-1]["script"] == shim.name
+    assert out["replaced"] == [] and cron.jobs[-1]["script"] == shim.name
     out = m.pkg.alerts_on("15m", "telegram", home=tmp_path)
-    assert out["replaced"] == ["job2"] and [j["id"] for j in cron.jobs] == ["other", "job2"]
+    assert out["replaced"] == ["job2"] and [j["id"] for j in cron.jobs] == ["other", "job3"]
     assert cron.jobs[-1]["deliver"] == "telegram"
     status = m.pkg.alerts_status(tmp_path, jobs=cron.jobs)
     assert status["on"] is True and status["jobs"] == 1 and status["deliver"] == "telegram"
     off = m.pkg.alerts_off(home=tmp_path)
-    assert off == {"removed_jobs": ["job2"], "removed_script": True} and [j["id"] for j in cron.jobs] == ["other"]
+    assert off == {"removed_jobs": ["job3"], "removed_script": True} and [j["id"] for j in cron.jobs] == ["other"]
     assert m.pkg.alerts_status(tmp_path, jobs=cron.jobs)["on"] is False
 
 
@@ -198,7 +197,7 @@ def test_alerts_on_replaces_the_0_1_0_job_and_deletes_its_shim(m, tmp_path, monk
     old_shim = tmp_path / "scripts" / m.alerts.OLD_SCRIPT_NAME
     old_shim.parent.mkdir()
     old_shim.write_text("#!/usr/bin/env python3\n")
-    monkeypatch.setattr(m.pkg, "_cron_jobs", lambda: cron)
+    monkeypatch.setattr(m.pkg, "_cron", lambda home=None: cron)
     out = m.pkg.alerts_on("5m", "local", home=tmp_path)
     assert out["replaced"] == ["old"] and [j["name"] for j in cron.jobs] == ["Coolifybrücke alerts"]
     assert not old_shim.exists() and sorted(p.name for p in old_shim.parent.iterdir()) == ["coolifybruecke-alerts.py"]
@@ -231,6 +230,130 @@ def test_cli_parser_and_handler(m, tmp_path, monkeypatch):
 
 
 def test_alerts_route_reads_without_coolify(m, tmp_path, monkeypatch):
-    monkeypatch.setattr(m.pkg, "_cron_jobs", lambda: FakeCron())
+    monkeypatch.setattr(m.pkg, "_cron", lambda home=None: FakeCron())
     status, body = m.pkg.api_alerts(data_dir=tmp_path)
     assert status == 200 and body["ok"] is True and body["on"] is False and body["open"] == 0
+
+
+# --- Hermes' public cron CLI: the text contract, a recording fake, the real command ---------------
+
+FIXTURES = ROOT / "tests" / "fixtures"
+
+
+def test_cron_list_output_parses_into_jobs(m):
+    jobs = m.alerts.parse_cron_list((FIXTURES / "cron-list-0.23.1.txt").read_text(encoding="utf-8"))
+    assert [(j["id"], j["state"], j["enabled"]) for j in jobs] == [
+        ("ddca34b3691c", "paused", False), ("c2299df18e72", "active", True)]
+    ours = m.alerts.our_jobs(jobs)
+    assert [j["name"] for j in ours] == ["Coolifybrücke alerts"]
+    assert (ours[0]["schedule_display"], ours[0]["deliver"]) == ("every 5m", "telegram")
+    assert m.alerts.describe(ours[0], None)["on"] is False
+    coloured = "\x1b[33mddca34b3691c\x1b[0m \x1b[32m[active]\x1b[0m"
+    assert m.alerts.parse_cron_list("  " + coloured + "\n    Script:    coolifybruecke-alerts.py\n")[0]["enabled"] is True
+
+
+def test_cron_create_output_names_the_job(m):
+    out = (FIXTURES / "cron-create-0.23.1.txt").read_text(encoding="utf-8")
+    assert m.alerts.parse_created_job(out) == {"id": "ddca34b3691c", "schedule_display": "every 5m"}
+    assert m.alerts.parse_created_job("Failed to create job: Invalid duration: 'x'") == {}
+
+
+FAKE_HERMES = r"""#!{python}
+import json, os, sys
+home = os.environ["HERMES_HOME"]
+store = os.path.join(home, "fake-cron.json")
+jobs = json.load(open(store)) if os.path.exists(store) else []
+with open(os.path.join(home, "fake-cron.log"), "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\n")
+calls = len(open(os.path.join(home, "fake-cron.log")).readlines())
+args = sys.argv[1:]
+assert args[0] == "cron", args
+if args[1] == "list":
+    print("Scheduled Jobs (profile: default)")
+    for j in jobs:
+        print(f"  {{j['id']}} [active]")
+        for label in ("Name", "Schedule", "Deliver", "Script"):
+            print(f"    {{label + ':':<11}}{{j[label]}}")
+        print()
+elif args[1] == "create":
+    if os.environ.get("FAKE_CRON_FAIL"):
+        print("Failed to create job: Invalid duration: 'soon'")
+        sys.exit(1)
+    rest = [a for a in args[3:] if a != "--no-agent"]
+    opts = dict(zip(rest[0::2], rest[1::2]))
+    job = {{"id": f"j{{calls}}", "Name": opts["--name"], "Schedule": "every " + args[2],
+            "Deliver": opts["--deliver"], "Script": opts["--script"]}}
+    jobs.append(job)
+    print(f"Created job: {{job['id']}}")
+    print(f"  Name: {{job['Name']}}")
+    print(f"  Schedule: {{job['Schedule']}}")
+elif args[1] == "remove":
+    jobs = [j for j in jobs if j["id"] != args[2]]
+json.dump(jobs, open(store, "w"))
+"""
+
+
+@pytest.fixture
+def fake_hermes(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    exe = fake_bin / "hermes"
+    exe.write_text(FAKE_HERMES.format(python=sys.executable), encoding="utf-8")
+    exe.chmod(0o755)
+    import os
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    home = tmp_path / "home"
+    home.mkdir()
+    return home
+
+
+def _calls(home):
+    return [json.loads(line) for line in (home / "fake-cron.log").read_text().splitlines()]
+
+
+def test_alerts_drive_hermes_cron_cli_for_the_profile(m, fake_hermes):
+    home = fake_hermes
+    out = m.pkg.alerts_on("10m", "telegram", home=home)
+    assert out == {"job_id": "j2", "schedule": "every 10m", "deliver": "telegram",
+                   "script": str(home / "scripts" / m.alerts.SCRIPT_NAME), "replaced": []}
+    assert _calls(home) == [["cron", "list", "--all"],
+                            ["cron", "create", "10m", "--no-agent", "--script", m.alerts.SCRIPT_NAME,
+                             "--name", m.alerts.JOB_NAME, "--deliver", "telegram"]]
+    status = m.pkg.alerts_status(home, jobs=m.pkg._cron(home).list_jobs())
+    assert (status["on"], status["schedule"], status["deliver"]) == (True, "every 10m", "telegram")
+    again = m.pkg.alerts_on("5m", "local", home=home)
+    assert again["replaced"] == ["j2"] and again["job_id"] != "j2"
+    off = m.pkg.alerts_off(home=home)
+    assert off == {"removed_jobs": [again["job_id"]], "removed_script": True}
+    assert ["cron", "remove", again["job_id"]] in _calls(home) and m.pkg._cron(home).list_jobs() == []
+
+
+def test_a_refused_create_reaches_the_user_and_keeps_the_running_job(m, fake_hermes, monkeypatch, capsys):
+    import argparse
+    running = m.pkg.alerts_on("5m", "local", home=fake_hermes)["job_id"]
+    monkeypatch.setenv("FAKE_CRON_FAIL", "1")
+    monkeypatch.setattr(m.pkg, "_profile_home", lambda home=None: fake_hermes)
+    parser = argparse.ArgumentParser()
+    m.pkg._cli_setup(parser)
+    rc = m.pkg.make_cli_handler(lambda k, d=None: d, lambda n: None)(parser.parse_args(["alerts", "on", "--every", "soon"]))
+    printed = capsys.readouterr().out
+    assert rc == 1 and "Invalid duration: 'soon'" in printed and "hermes cron list" in printed
+    assert [j["id"] for j in m.pkg._cron(fake_hermes).list_jobs()] == [running]
+
+
+def test_alerts_against_the_installed_hermes_cron_cli(m, tmp_path):
+    """The contract test: the real `hermes cron` of this install, in a throwaway home."""
+    import shutil
+    if not shutil.which("hermes"):
+        pytest.skip("no `hermes` command on PATH")
+    home = tmp_path / "home"
+    home.mkdir()
+    on = m.pkg.alerts_on("15m", "local", home=home)
+    jobs = m.pkg._cron(home).list_jobs()
+    assert [j["id"] for j in m.alerts.our_jobs(jobs)] == [on["job_id"]] and on["schedule"] == "every 15m"
+    status = m.pkg.alerts_status(home, jobs=jobs)
+    assert (status["on"], status["schedule"], status["deliver"]) == (True, "every 15m", "local")
+    assert m.pkg.alerts_on("5m", "local", home=home)["replaced"] == [on["job_id"]]
+    off = m.pkg.alerts_off(home=home)
+    assert len(off["removed_jobs"]) == 1 and off["removed_script"] is True
+    assert m.alerts.our_jobs(m.pkg._cron(home).list_jobs()) == []

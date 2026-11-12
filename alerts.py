@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -165,6 +166,40 @@ def write_shim(home: Path) -> Path:
     tmp.write_text(SHIM, encoding="utf-8")
     os.replace(tmp, path)
     return path
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_JOB_HEAD = re.compile(r"^  (\S+) \[(\w+)\]\s*$")
+_JOB_ROW = re.compile(r"^    ([A-Z][A-Za-z ]*?):\s+(.*?)\s*$")
+_ROW_KEYS = {"Name": "name", "Schedule": "schedule_display", "Deliver": "deliver", "Script": "script"}
+
+
+def parse_cron_list(text: str) -> list[dict]:
+    """The jobs in `hermes cron list --all` output, with the keys our_jobs() and describe() read.
+
+    The plugin goes through Hermes' public CLI, not its scheduler module, so this text is the
+    contract: a job is a `  <id> [<state>]` line followed by indented `Label: value` rows."""
+    jobs: list[dict] = []
+    for line in _ANSI.sub("", text or "").splitlines():
+        head = _JOB_HEAD.match(line)
+        if head:
+            state = head.group(2)
+            jobs.append({"id": head.group(1), "state": state, "enabled": state == "active"})
+            continue
+        row = _JOB_ROW.match(line)
+        if row and jobs and row.group(1) in _ROW_KEYS:
+            jobs[-1][_ROW_KEYS[row.group(1)]] = row.group(2)
+    return jobs
+
+
+def parse_created_job(text: str) -> dict:
+    """The job `hermes cron create` reports (`Created job: <id>`, `Schedule: ...`); {} when none."""
+    clean = _ANSI.sub("", text or "")
+    created = re.search(r"^Created job: (\S+)\s*$", clean, re.M)
+    if not created:
+        return {}
+    schedule = re.search(r"^\s+Schedule: (.+?)\s*$", clean, re.M)
+    return {"id": created.group(1), "schedule_display": schedule.group(1) if schedule else None}
 
 
 def our_jobs(jobs: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:

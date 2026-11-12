@@ -85,7 +85,7 @@ def test_unreachable_instance_unlocks_nothing_and_says_why(kit):
     out, fake = kit.report(action="scoped_read_deploy", read="teamwide_read", unreachable=True)
     assert out["available"] == []
     assert ids([e["feature"] for e in out["not_available"]]) == ALL
-    assert all("did not answer" in e["reason"] for e in out["not_available"])
+    assert all("could not be reached" in e["reason"] for e in out["not_available"])
     assert "COOLIFYBRUECKE_URL" in out["not_available"][0]["unlock"]
     assert out["instance"]["reachable"] is False
     assert {t["status"] for t in out["tokens"]} == {"unreachable"}
@@ -194,7 +194,7 @@ def test_each_token_fixture_renders_its_result_line(kit, action, read, line, ext
 
 def test_unreachable_instance_has_one_result_line(kit):
     out, _ = kit.report(action="teamwide_read_deploy", unreachable=True)
-    assert out["setup"]["line"] == "Coolify did not answer · check the URL"
+    assert out["setup"]["line"] == "Coolify could not be reached from here"
 
 
 def test_no_surface_says_action_or_overview_token(kit):

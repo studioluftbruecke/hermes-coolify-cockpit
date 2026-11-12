@@ -317,13 +317,14 @@ def choose_reader(views: list[_View]) -> Optional[_View]:
 
 def _no_reader_message(views: list[_View]) -> str:
     if all(v.state == "unreachable" for v in views):
-        return (f"The Coolify instance did not answer ({views[0].detail}). Check COOLIFYBRUECKE_URL, "
-                "that the instance is up, and Coolify's allowed IPs (Settings → Advanced → API).")
+        return (f"Coolify could not be reached ({views[0].detail}). Check COOLIFYBRUECKE_URL, "
+                "that the instance is up, Coolify's allowed IPs (Settings → Advanced → API), and any "
+                "proxy or firewall in front of Coolify.")
     parts = []
     for v in views:
         what = {"unauthorized": "was rejected (401); store a valid token",
                 "no_read": "lacks the `read` right",
-                "unreachable": f"got no answer ({v.detail})"}.get(v.state, f"failed ({v.detail})")
+                "unreachable": f"could not reach Coolify ({v.detail})"}.get(v.state, f"failed ({v.detail})")
         parts.append(f"the {v.slot.role.word} ({v.slot.setting}) {what}")
     return "No token can read the instance: " + "; ".join(parts) + "."
 

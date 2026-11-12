@@ -208,8 +208,8 @@ request carries the user agent `hermes-coolifybruecke` and no instance data.
   action you sent is followed, a followed deployment's history every 5 seconds until it ends, the
   availability check and the action list every 5 minutes, the server charts of a longer range
   every 5 minutes, and the layout (every 15 seconds), the notebook (every 60 seconds) and the
-  alert job's state (every 60 seconds, on the settings page), which are files on the Hermes
-  backend and call no Coolify endpoint.
+  alert job's state (every 60 seconds, on the settings page; one `hermes cron list --all` each),
+  which are read on the Hermes backend and call no Coolify endpoint.
 - With alerts on, the cron job runs `hermes coolifybruecke tick` at the interval you chose
   (default every 5 minutes), whether Desktop is open or not. Each tick reads a fresh snapshot plus
   up to 40 env and branch answers.
@@ -275,12 +275,14 @@ Everything the plugin writes lives in its data directory in the Hermes profile
 | `alerts-state.json` | The alert job's open and pending items (signal, title, app or server id, times), keyed by the instance URL |
 | `<profile>/scripts/coolifybruecke-alerts.py` | The alert script. Written by `hermes coolifybruecke alerts on`, removed by `alerts off` |
 
-`alerts on` also adds one job to Hermes' own cron job list, and `alerts off` removes it.
+`alerts on` also adds one job to Hermes' own cron job list, and `alerts off` removes it. Both go
+through Hermes' public cron command (`hermes cron list --all`, `hermes cron create`,
+`hermes cron remove`), never through Hermes' scheduler files.
 
 Writes go to a temporary file beside the target (`.<name>.<process id>.<...>.tmp`) that replaces it
 in one step. Apart from its own install folder and these files, the plugin reads the profile's
-config (to see whether Forgebrücke is enabled and which host it uses) and Hermes' cron job list (for
-`alerts status` and `GET /alerts`). Hermes hands it the settings and tokens.
+config (to see whether Forgebrücke is enabled and which host it uses) and Hermes' cron job list
+through `hermes cron list --all` (for `alerts status` and `GET /alerts`). Hermes hands it the settings and tokens.
 
 ### Desktop half
 
@@ -292,8 +294,10 @@ chat's session id per profile, in Hermes Desktop's plugin storage. Links open in
 ### Not included
 
 No telemetry or analytics, no inbound port, no background process of its own. The plugin runs no
-shell command; the alert script it writes for `alerts on` starts `hermes coolifybruecke tick` when
-Hermes' cron runs it. No backup signal (see [the guide](docs/guide.md#what-needs-you-the-attention-list)).
+shell command. It starts one program, Hermes' own `hermes cron` (an argument list, no shell, for
+the same profile): `list --all` for `alerts status` and the Alerts card, `create` and `remove`
+for `alerts on` and `alerts off`. The alert script it writes for `alerts on` starts
+`hermes coolifybruecke tick` when Hermes' cron runs it. No backup signal (see [the guide](docs/guide.md#what-needs-you-the-attention-list)).
 
 ## Uninstall
 
