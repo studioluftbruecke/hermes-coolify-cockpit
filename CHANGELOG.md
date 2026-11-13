@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6
+
+Update both halves: the plugin where Hermes runs and the one Hermes Desktop loads.
+
+- New setting "Show in status bar" (on by default): off hides the Coolify chip in Desktop's status
+  bar. The chip is also listed as "Coolifybrücke" in the bar's right-click menu, and a chip that
+  fails to render no longer affects the rest of the bar.
+
 ## 0.2.5
 
 A review round on security and correctness before the catalog's next review. Update both halves: the plugin where Hermes runs and the one Hermes Desktop loads.

@@ -108,7 +108,7 @@ function boot(opts = {}) {
   plugin.register(ctx)
   const ids = opts.mount || ['page']
   const parts = ids.map(id => contributions.find(c => c.id === id))
-  h.mount(h.jsx('div', { children: parts.map((c, i) => h.jsx('section', { 'data-part': ids[i], children: c.render() }, ids[i])) }))
+  h.mount(h.jsx('div', { children: parts.map((c, i) => h.jsx('section', { 'data-part': ids[i], children: (c.render || c.data.render)() }, ids[i])) }))
   return { calls, live, opened }
 }
 

@@ -42,12 +42,12 @@ import {
   useQueryClient,
   useValue
 } from '@hermes/plugin-sdk'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'coolifybruecke'
 // This half's version; equal to plugin.yaml's (a test checks). GET /setup names the Hermes half's.
-const VERSION = '0.2.5'
+const VERSION = '0.2.6'
 const PATH = '/coolifybruecke'
 const TAG = '[' + ID + ']'
 const SESSION_TITLE = 'Cockpit'
@@ -2916,10 +2916,109 @@ function AlertsCard() {
   )
 }
 
+// ── status-bar visibility ────────────────────────────────────────────────────────────────────────
+
+// The chip follows the profile's show_in_statusbar setting (plugin.yaml), which GET /setup names. It
+// is a status-bar *data* item with a stable id and the brand as toggleLabel: only such an item is
+// listed in Desktop's right-click menu on the bar, and Desktop keeps that menu's hidden list by
+// `data.id`, which the plugin context does not prefix. A data item skips Desktop's own error
+// boundary, so the chip brings its own.
+//
+// While the chip is shown, its own GET /setup poll (useSetup) carries the setting, so being shown
+// costs no extra request. While it is hidden nothing polls, so GET /setup is read on window focus,
+// on a profile switch and every 60 s. A failed read changes nothing (no flicker during an outage).
+// The last answer is kept in this Desktop's storage, so a chip switched off does not flash at start.
+const STATUSBAR_ITEM_ID = ID + '.chip'
+const STATUSBAR_STORED = 'show_in_statusbar'
+const STATUSBAR_POLL_MS = 60000
+let disposeChip = null
+let statusbarSeq = 0
+
+class ChipBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { failed: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error) {
+    log('the status-bar chip failed and is hidden until the plugin reloads', String(error))
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
+function chipItem() {
+  return jsx(ChipBoundary, { children: jsx(CockpitChip, {}) })
+}
+
+// Register the chip while shown, dispose it while hidden; the same id comes back only after the
+// old registration is disposed.
+function applyStatusbar(show) {
+  if (!pluginCtx) return
+  if (show && !disposeChip) {
+    disposeChip = pluginCtx.register({
+      id: 'chip',
+      area: STATUSBAR_AREAS.right,
+      order: 70,
+      data: { id: STATUSBAR_ITEM_ID, toggleLabel: NAV_LABEL, render: chipItem }
+    })
+  } else if (!show && disposeChip) {
+    const dispose = disposeChip
+    disposeChip = null
+    dispose()
+  }
+}
+
+// A backend without the key (older than this setting) counts as on, its default.
+function followStatusbarSetting(setup) {
+  const show = !setup || setup.show_in_statusbar !== false
+  statusbarSeq += 1
+  if (pluginCtx && pluginCtx.storage && typeof pluginCtx.storage.set === 'function') pluginCtx.storage.set(STATUSBAR_STORED, show)
+  applyStatusbar(show)
+  return show
+}
+
+// One GET /setup read; returns the applied value, or null when the read failed or a newer answer
+// arrived meanwhile.
+async function readStatusbarSetting() {
+  if (!pluginCtx) return null
+  const mine = ++statusbarSeq
+  try {
+    const setup = await rest('/setup')
+    if (mine !== statusbarSeq) return null
+    return followStatusbarSetting(setup)
+  } catch {
+    return null
+  }
+}
+
+function startStatusbar(ctx) {
+  disposeChip = null
+  statusbarSeq = 0
+  const stored = ctx.storage && typeof ctx.storage.get === 'function' ? ctx.storage.get(STATUSBAR_STORED, true) : true
+  applyStatusbar(stored !== false)
+  const readIfHidden = () => (disposeChip ? null : readStatusbarSetting())
+  readIfHidden()
+  if (typeof ctx.setInterval === 'function') ctx.setInterval(readIfHidden, STATUSBAR_POLL_MS)
+  if (typeof ctx.addEventListener === 'function' && typeof window !== 'undefined') ctx.addEventListener(window, 'focus', readIfHidden)
+  const profile = host.state && host.state.profile
+  if (profile && typeof profile.listen === 'function' && typeof ctx.onDispose === 'function') ctx.onDispose(profile.listen(() => readIfHidden()))
+}
+
 function CockpitChip() {
   const setup = useSetup()
   const snap = useSnapshot()
   const caps = useCapabilities()
+  // The chip's own poll carries the show setting while it is shown.
+  useEffect(() => {
+    if (setup.data) followStatusbarSetting(setup.data)
+  }, [setup.data])
   const now = setupState(setup)
   if (now === 'off') return null // backend off on this profile
   if (snap.error && snap.error.status === 404 && !(snap.error.body && snap.error.body.error)) return null
@@ -2977,7 +3076,9 @@ export default {
     // The sidebar row: brand, show switch and position from this Desktop's storage (default 54,
     // below Kanban at 50).
     sidebarRow = startSidebarRow(ctx, { brand: 'Coolifybrücke', path: PATH, codicon: 'cloud', defaultPosition: 54, sdk: SIDEBAR_SDK })
-    ctx.register({ id: 'chip', area: STATUSBAR_AREAS.right, order: 70, render: () => jsx(CockpitChip, {}) })
+    // The status-bar chip: shown or hidden by the show_in_statusbar setting, and listed under the
+    // brand in Desktop's right-click menu on the bar.
+    startStatusbar(ctx)
     // Settings, Plugins: the same name and icon as the sidebar row. Desktop folds the plugin's
     // settings form (plugin.yaml config_schema) under this entry as its "Agent settings" page.
     if (typeof ctx.registerSettingsPage === 'function') {

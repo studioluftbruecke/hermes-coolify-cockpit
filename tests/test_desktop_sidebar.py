@@ -43,6 +43,7 @@ SPECIAL = {
     "STATUSBAR_AREAS": "{ left: 'statusbar.left', right: 'statusbar.right' }",
     "jsx": "(type, props, key) => ({ type, props, key })",
     "jsxs": "(type, props, key) => ({ type, props, key })",
+    "Component": "class { constructor(props) { this.props = props; this.state = {} } }",
 }
 
 RUN = r"""

@@ -33,6 +33,20 @@ export function jsx(type, props, key) {
 }
 export const jsxs = jsx
 
+// React's class base, enough for an error boundary: props, state and a setState that re-renders.
+export class Component {
+  constructor(props) {
+    this.props = props
+    this.state = {}
+  }
+
+  setState(next) {
+    this.state = { ...this.state, ...(typeof next === 'function' ? next(this.state, this.props) : next) }
+    schedule()
+  }
+}
+Component.prototype.isReactComponent = {}
+
 function slot(init) {
   const inst = current
   const i = hookIndex++
@@ -90,6 +104,23 @@ function expand(node, path, parent) {
   if (node == null || typeof node === 'boolean') return []
   if (typeof node === 'string' || typeof node === 'number') return [String(node)]
   if (Array.isArray(node)) return node.flatMap((child, i) => expand(child, path + '/' + (child && child.key != null ? 'k:' + child.key : i), parent))
+  // A class component: one instance per position, and an error boundary when the class has
+  // getDerivedStateFromError (a child that throws while rendering is caught here, as React does).
+  if (typeof node.type === 'function' && node.type.prototype && node.type.prototype.isReactComponent) {
+    const id = path + ':' + (node.type.name || 'anonymous') + (node.key != null ? '#' + node.key : '')
+    let inst = instances.get(id)
+    if (!inst) instances.set(id, (inst = { hooks: [], obj: new node.type(node.props) }))
+    visited.add(id)
+    inst.obj.props = node.props
+    try {
+      return expand(inst.obj.render(), id, parent)
+    } catch (error) {
+      if (typeof node.type.getDerivedStateFromError !== 'function') throw error
+      inst.obj.state = { ...inst.obj.state, ...node.type.getDerivedStateFromError(error) }
+      if (typeof inst.obj.componentDidCatch === 'function') inst.obj.componentDidCatch(error)
+      return expand(inst.obj.render(), id, parent)
+    }
+  }
   if (typeof node.type === 'function') {
     const id = path + ':' + (node.type.name || 'anonymous') + (node.key != null ? '#' + node.key : '')
     let inst = instances.get(id)

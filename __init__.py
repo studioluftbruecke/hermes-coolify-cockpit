@@ -69,6 +69,9 @@ def _default_secret(name: str) -> Optional[str]:
     return get_secret(name)
 
 
+STATUSBAR_SETTING = "show_in_statusbar"
+
+
 def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -587,7 +590,9 @@ def api_setup(get_setting: SettingGetter, get_secret: SecretGetter) -> tuple[int
         {"id": "read_token", "setting": caps_mod.READ_SETTING, "set": read, "required": False},
     ]
     configured = steps[0]["set"] and (action or read)
-    return 200, {"ok": True, "configured": configured, "steps": steps}
+    # The Desktop half reads this to show or hide its status-bar chip (default: shown).
+    statusbar = _as_bool(get_setting(STATUSBAR_SETTING, True), True)
+    return 200, {"ok": True, "configured": configured, "steps": steps, "show_in_statusbar": statusbar}
 
 
 def _status_for(body: dict) -> int:

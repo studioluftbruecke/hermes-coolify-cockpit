@@ -3,7 +3,7 @@
   "label": "Coolifybrücke",
   "description": "Backend routes for the Coolifybrücke pane: capabilities, snapshot, deployment history",
   "icon": "Gauge",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "tab": {
     "path": "/coolifybruecke",
     "hidden": true

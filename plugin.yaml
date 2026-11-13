@@ -1,5 +1,5 @@
 name: coolifybruecke
-version: "0.2.5"
+version: "0.2.6"
 description: "Coolifybrücke · a cockpit for Coolify: see what needs you across your Coolify instance, deploy with your approval, and let Hermes explain failed deploys."
 author: "Studio Luftbrücke"
 license: MIT
@@ -55,6 +55,11 @@ config_schema:
     default: true
     label: "Check for Coolify updates"
     description: "Compares your version with Coolify's release feed at cdn.coollabs.io."
+  show_in_statusbar:
+    type: boolean
+    default: true
+    label: "Show in status bar"
+    description: "Shows the Coolify chip with servers, deploys and failures in Desktop's status bar."
   COOLIFYBRUECKE_READ_TOKEN:
     type: secret
     env: COOLIFYBRUECKE_READ_TOKEN

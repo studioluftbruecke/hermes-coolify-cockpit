@@ -49,6 +49,7 @@ REACT = {
     "useEffect": "() => {}",
     "useMemo": "f => f()",
     "useRef": "v => ({ current: v })",
+    "Component": "class { constructor(props) { this.props = props; this.state = {} } }",
 }
 
 RUN = r"""
