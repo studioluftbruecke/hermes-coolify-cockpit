@@ -1,4 +1,4 @@
-"""Behaviour of M5: the WidgetType registry, layout validation, the three presets, the versioned
+"""Behaviour: the WidgetType registry, layout validation, the three presets, the versioned
 store (compare-and-set), the `coolify_cockpit` tool and the layout routes. No network: the tool
 and the routes only edit a file in a temp dir (the availability route uses the fake instance)."""
 
@@ -35,7 +35,7 @@ def errors_of(lay, fn, *args):
 
 def test_one_widget_type_per_product_widget_each_tied_to_a_feature_rule(plugin, lay):
     caps = importlib.import_module(plugin.__name__ + ".capabilities")
-    # 0.1.0 (A9): connection, diagnosis, update_notice and backups left; summary is new
+    # Since 0.1.0: connection, diagnosis, update_notice and backups left; summary is new
     assert list(lay.TYPES) == ["summary", "deployments", "resources", "servers", "quick_actions", "notebook", "chat"]
     rule_ids = {r.id for r in caps.FEATURE_RULES}
     for wtype in lay.WIDGET_TYPES:
@@ -176,7 +176,7 @@ def test_preset_on_top_keeps_the_current_widgets_and_renames_clashes(lay):
 
 
 def test_a_0011_layout_opens_on_the_new_default_without_a_warning_and_saves_as_schema_2(lay, store):
-    # The file 0.0.11 wrote on his Mac test (schema 1, his staging deploy desk on top).
+    # A file 0.0.11 wrote (schema 1, a staging deploy desk on top).
     old = {"schema": 1, "version": 7, "preset": "overview", "updated_at": "2026-11-09T20:00:00Z", "updated_by": "pane",
            "widgets": [{"id": "deploy-resources", "type": "resources", "title": "Deploy desk: staging", "size": "l",
                         "props": {"environment": "staging", "row_actions": ["deploy", "restart"]}},

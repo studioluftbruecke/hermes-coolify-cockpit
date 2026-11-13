@@ -1,4 +1,4 @@
-"""0.1.0 M6: the alert job (alerts.py) and the tick behind it (__init__.tick_report, the CLI).
+"""the alert job (alerts.py) and the tick behind it (__init__.tick_report, the CLI).
 
 The tick is driven through the same fake Coolify the snapshot tests use, so the Attention list it
 diffs is the one the page and the agent read.

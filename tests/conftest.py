@@ -89,6 +89,50 @@ def own_hermes_home(tmp_path_factory, monkeypatch):
     return home
 
 
+def install_session_finite(monkeypatch, module):
+    """Make `from gateway.session_finite import finite_turn_required` see `module` (None: the import
+    fails, as on a Hermes release that moved it). Works with and without Hermes on the path."""
+    import types
+
+    if "gateway" not in sys.modules:
+        try:
+            importlib.import_module("gateway")
+        except Exception:
+            monkeypatch.setitem(sys.modules, "gateway", types.ModuleType("gateway"))
+    monkeypatch.setitem(sys.modules, "gateway.session_finite", module)
+
+
+def finite_module(answer):
+    """A stand-in for Hermes' gateway.session_finite whose finite_turn_required() returns `answer`
+    (or raises it, when it is an exception)."""
+    import types
+
+    module = types.ModuleType("gateway.session_finite")
+
+    def finite_turn_required():
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    setattr(module, "finite_turn_required", finite_turn_required)
+    return module
+
+
+@pytest.fixture(autouse=True)
+def attended_by_default(monkeypatch):
+    """Hermes says "not a one-shot turn" unless a test says otherwise, so a test's verdict does not
+    depend on whether Hermes is importable where the suite runs."""
+    install_session_finite(monkeypatch, finite_module(False))
+
+
+@pytest.fixture
+def session_finite(monkeypatch):
+    """Set what Hermes' one-shot marker answers: True, False, an exception, or None (no module)."""
+    def set_answer(answer):
+        install_session_finite(monkeypatch, None if answer is None else finite_module(answer))
+    return set_answer
+
+
 @pytest.fixture
 def plugin():
     return load_plugin()
@@ -130,3 +174,68 @@ class Kit:
 @pytest.fixture
 def kit():
     return Kit()
+
+
+class LocalHttp:
+    """A real HTTP server on 127.0.0.1 that answers from `route(method, path, headers)` ->
+    (status, headers, body bytes) and records every request it receives. The plugin's own urllib
+    transport talks to it over a socket, so urllib's redirect handling and http.client's header
+    checks run for real."""
+
+    def __init__(self):
+        import http.server
+        import threading
+
+        self.requests = []  # (method, path, headers dict)
+        self.route = lambda method, path, headers: (404, {"Content-Type": "application/json"},
+                                                    b'{"message":"Not found."}')
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def _answer(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                headers = {k: v for k, v in self.headers.items()}
+                outer.requests.append((self.command, self.path, headers))
+                status, extra, body = outer.route(self.command, self.path, headers)
+                self.send_response(status)
+                for name, value in (extra or {}).items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = do_PATCH = do_DELETE = _answer
+
+            def log_message(self, format, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def json_answer(status, payload):
+    return status, {"Content-Type": "application/json"}, json.dumps(payload).encode()
+
+
+@pytest.fixture
+def local_http():
+    """Two local servers: `coolify` plays the configured Coolify address, `elsewhere` plays the
+    host a redirect points to (reached as `localhost`, so urllib sees another host name)."""
+    servers = [LocalHttp(), LocalHttp()]
+    try:
+        yield {"coolify": servers[0], "elsewhere": servers[1], "json": json_answer}
+    finally:
+        for server in servers:
+            server.close()

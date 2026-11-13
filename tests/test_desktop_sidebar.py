@@ -1,4 +1,4 @@
-"""0.2.1: Coolifybrücke's sidebar row and its Sidebar section, run from the real desktop/plugin.js.
+"""Coolifybrücke's sidebar row and its Sidebar section, run from the real desktop/plugin.js.
 
 tests/test_sidebar_row.py proves the shared module on its own. This file loads the plugin's own
 Desktop half in node, with the three imports (`@hermes/plugin-sdk`, `react`, `react/jsx-runtime`)
@@ -6,12 +6,12 @@ swapped for small stubs, calls its `register(ctx)` against a fake ctx whose `reg
 entry by id (as Desktop's registry does), and checks what this plugin wires up:
 
 - one sidebar row, id `nav`, labelled "Coolifybrücke", codicon `cloud`, path `/coolifybruecke`,
-  at 54 with nothing stored (D3), at the stored position, and none when stored hidden;
+  at 54 with nothing stored (below Kanban at 50), at the stored position, and none when stored hidden;
 - the palette row "Open Coolifybrücke" stays registered while the row is hidden, so the hidden hint
   names a command that exists;
 - the settings page "Coolifybrücke" renders the Sidebar section bound to that same row: the switch
   hides the row and stores the choice, the field moves it, the hint names the palette row;
-- the chat tab title stays "Cockpit" (brand rename D5).
+- the chat tab title stays "Cockpit" (the brand names the plugin, not the chat).
 
 Run from the plugin folder: python3 -m pytest tests -q --import-mode=importlib
 """

@@ -1,4 +1,4 @@
-"""What needs the user: one `FleetRow` per application and the `Signal` registry (PLAN-v0.1 -> Data shapes).
+"""What needs the user: one `FleetRow` per application and the `Signal` registry.
 
 The snapshot reads the team's newest deployments in two MCP calls (`list_deployments` with
 `status=finished` and `status=failed`, 100 rows each) plus the running queue. From those rows this
@@ -8,7 +8,7 @@ module derives, per application:
                 env_changed_at?, behind? }
     state     ok | failing | deploying | never_deployed | unknown
 
-The failing rule (Konstantin, A3): an application is failing when its newest settled deployment
+The failing rule: an application is failing when its newest settled deployment
 (finished or failed) failed and no newer deployment is running. A cancelled deployment counts as
 nothing (it is in neither list). When a list is cut (more rows than one page), a row older than the
 other list's oldest row could hide a newer opposite result; such an application gets one REST

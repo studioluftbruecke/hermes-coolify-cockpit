@@ -1,10 +1,13 @@
 """Backend routes for the Coolifybrücke pane, mounted at `/api/plugins/coolifybruecke/`.
 
-    GET /setup                            which settings are filled in (no Coolify request, no token value)
+    GET /setup                            which settings are filled in (no Coolify request, no token
+                                          value) and this half's `version`, which the page compares
+                                          with its own
     GET /capabilities[?refresh=true]      the token setup report (same as coolify_capabilities),
                                           one check shared by every caller for 2 minutes;
                                           refresh=true is the page's "Check again"
     GET /snapshot[?refresh=true]          the Snapshot (servers, resources, deployments), 10 s cache
+    GET /servers/metrics[?range=1h]       CPU, memory and disk per server for the chart range (1h, 6h, 24h, 7d)
     GET /resources/{uuid}/deployments     deployment history of one application (?take=N, max 50)
     GET /actions                          the ActionSpec registry and whether the API token holds deploy
     POST /actions                         {kind, target, params?, dry_run?}: one lifecycle action
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -45,6 +49,19 @@ _HOST_PROCESS_ENV = "HERMES_PLUGIN_HOST_PROCESS"  # set by Hermes in a plugin ho
 _PACKAGE = "hermes_coolifybruecke_dashboard"
 
 router = APIRouter()
+
+
+def _manifest_version() -> str:
+    """plugin.yaml's version, read once: the Desktop half shows a note when its own differs."""
+    try:
+        text = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    found = re.search(r'^version:\s*["\']?([^"\'\s]+)', text, re.M)
+    return found.group(1) if found else ""
+
+
+VERSION = _manifest_version()
 
 
 def _plugin():
@@ -70,22 +87,46 @@ def _get_setting(key: str, default: Any = None) -> Any:
     return settings.get(key, default)
 
 
+_SCOPE_TTL_S = 2.0  # one build serves a page load's burst of reads; a saved token shows within it
+_SCOPE_CACHE: dict[str, Any] = {}
+
+
+def _own_secrets(home: Path) -> Optional[dict]:
+    """The plugin's own keys from Hermes' scope builder, built again after _SCOPE_TTL_S and on the
+    page's "Check again". Only `COOLIFYBRUECKE_*` keys are kept between requests."""
+    import time
+
+    now = time.monotonic()
+    cached = _SCOPE_CACHE.get(str(home))
+    if cached and now - cached["at"] < _SCOPE_TTL_S:
+        return cached["values"]
+    try:
+        from agent.secret_scope import build_profile_secret_scope
+
+        built = build_profile_secret_scope(home)
+    except Exception:
+        return None
+    values = {k: v for k, v in (built or {}).items() if k.startswith(PLUGIN.upper() + "_")}
+    _SCOPE_CACHE[str(home)] = {"at": now, "values": values}
+    return values
+
+
 def _get_secret(name: str) -> Optional[str]:
     """The profile's current value. In a secondary profile these routes run in its plugin host
-    (`HERMES_PLUGIN_HOST_PROCESS=1`), whose environment is the profile's `.env` as it was when the
-    host started, so a token saved, changed or removed in the settings form afterwards stayed
-    invisible until Hermes restarted (measured, `experiments/coolify-cockpit/onboarding/`). There the
-    plugin's own keys come from Hermes' scope builder (the one each gateway turn uses), which reads
-    the profile's secrets as they are now, and a key missing there is missing, as in a gateway turn
-    for that profile. Everywhere else the request already runs in a fresh profile scope."""
+    (`HERMES_PLUGIN_HOST_PROCESS=1`), whose environment holds the profile's secrets as they were
+    when the host started, so a token saved, changed or removed in the settings form afterwards would stay
+    invisible until Hermes restarts. Hermes 0.23 has no public call that refreshes a plugin host's
+    secrets, so there the plugin's own keys come from Hermes' scope builder (the one each gateway
+    turn uses), which reads the profile's secrets as they are now; a key missing there is missing,
+    as in a gateway turn for that profile. Everywhere else the request already runs in a fresh
+    profile scope."""
     from agent.secret_scope import get_secret
 
-    if os.environ.get(_HOST_PROCESS_ENV) == "1" and name.startswith("COOLIFYBRUECKE_"):
+    if os.environ.get(_HOST_PROCESS_ENV) == "1" and name.startswith(PLUGIN.upper() + "_"):
         try:
-            from agent.secret_scope import build_profile_secret_scope
             from hermes_constants import get_hermes_home
 
-            current = build_profile_secret_scope(get_hermes_home())
+            current = _own_secrets(Path(get_hermes_home()))
         except Exception:
             current = None
         if current is not None:
@@ -102,11 +143,14 @@ def _reply(result: tuple[int, dict]) -> JSONResponse:
 
 @router.get("/setup")
 def setup() -> JSONResponse:
-    return _reply(_plugin().api_setup(_get_setting, _get_secret))
+    status, body = _plugin().api_setup(_get_setting, _get_secret)
+    return _reply((status, {**body, "version": VERSION}))
 
 
 @router.get("/capabilities")
 def capabilities(refresh: bool = Query(False)) -> JSONResponse:
+    if refresh:  # "Check again": read the profile's secrets anew too
+        _SCOPE_CACHE.clear()
     return _reply(_plugin().api_capabilities(_get_setting, _get_secret, refresh=refresh))
 
 
@@ -154,7 +198,7 @@ def layout_preset(body: dict = Body(...)) -> JSONResponse:
     return _reply(plugin.api_layout_preset(plugin.layout_store(), body))
 
 
-# M7: the notebook widget. Entries written here carry the author "you".
+# The notebook widget. Entries written here carry the author "you".
 
 @router.get("/notes")
 def notes(max_chars: int = Query(6000, ge=500, le=40000)) -> JSONResponse:
@@ -166,7 +210,7 @@ def notes_append(body: dict = Body(...)) -> JSONResponse:
     return _reply(_plugin().api_notes_append(body))
 
 
-# M3: the diagnosis widget. Pasted log text is classified here; a deployment UUID alone is fetched
+# The diagnosis widget. Pasted log text is classified here; a deployment UUID alone is fetched
 # only through a token holding read:sensitive (otherwise the answer asks for a paste).
 
 @router.post("/diagnose")

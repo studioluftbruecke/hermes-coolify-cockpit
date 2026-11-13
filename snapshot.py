@@ -1,6 +1,6 @@
 """The cockpit's read model: one Snapshot of servers, resources and deployments, cached 10 s.
 
-A Snapshot answers "what is going on?" in one read. It follows the M1 routing rule: every call
+A Snapshot answers "what is going on?" in one read. It follows the token routing rule: every call
 goes to the token with the widest view (team-wide before scoped; among equals the one that sees
 more applications; the read-only token before the API token). Nothing here writes: REST calls are
 GETs, and MCP calls are `tools/call` of the read tools in `READ_MCP_TOOLS` only.
@@ -17,7 +17,7 @@ All of them run in parallel. A rebuild that follows an expired snapshot starts t
 before the scope check, with the token that read last time, reuses server metrics younger
 than 60 s and the environment names younger than ENVIRONMENTS_TTL_S (`ReadHint`). Environment ids
 never change meaning, so the names are read again only when that time is up or a resource points
-at an id the map does not hold (a new environment). On Konstantin's instance (23 projects) that
+at an id the map does not hold (a new environment). On an instance with 23 projects that
 takes a rebuild from 30 rate-limited REST calls to 6. Per-application deployment history is not
 part of the snapshot; it is fetched on demand for one resource (`deployment_history`), except for an
 application at the window edge of the two lists (`fleet.needs_history`, at most EDGE_READS per build,
@@ -56,17 +56,19 @@ try:
     from .capabilities import (OVERVIEW_HINT, Connection, Role, TokenSlot)
     from .coolify_client import (CoolifyClient, CoolifyError, ErrorKind, HttpResponse, LimitWatch,
                                  Transport, fingerprint, urllib_transport)
+    from .redact import COMMIT_NOTE, commit_subject
 except ImportError:  # loaded as a top-level module (tests, scripts)
     import fleet as fleet_mod  # type: ignore
     from capabilities import OVERVIEW_HINT, Connection, Role, TokenSlot  # type: ignore
     from coolify_client import (CoolifyClient, CoolifyError, ErrorKind, HttpResponse,  # type: ignore
                                 LimitWatch, Transport, fingerprint, urllib_transport)
+    from redact import COMMIT_NOTE, commit_subject  # type: ignore
 
 CACHE_TTL_S = 10.0
 LIST_ROWS = 100       # rows per MCP list_deployments call (Coolify's page maximum)
 LATEST_KEEP = 40      # latest_deployments kept in the snapshot
 EDGE_READS = 5        # REST history reads per build for applications at the window edge
-GOOD_TAKE = 20        # M5: history rows read to find a failing app's last good deploy (Roll back)
+GOOD_TAKE = 20        # history rows read to find a failing app's last good deploy (Roll back)
 FALLBACK_READS = 10   # without MCP: REST history reads per build, each app at most every FALLBACK_TTL_S
 FALLBACK_TTL_S = 300.0
 HISTORY_DEFAULT = 10
@@ -80,7 +82,7 @@ READ_MCP_TOOLS = frozenset({"get_server_metrics", "list_deployments"})
 KINDS = ("application", "service", "database")
 
 
-# --- data shapes (PRODUCT.md -> Data shapes) ---------------------------------------------------
+# --- data shapes -------------------------------------------------------------------------------
 
 @dataclass
 class Deployment:
@@ -232,10 +234,14 @@ def mcp_tool(client: CoolifyClient, name: str, arguments: dict[str, Any]) -> Any
 
 
 def _deployment_url(base_url: str, raw: Any) -> Optional[str]:
+    """Coolify's link to a deployment: a path on the instance, or a full http(s) URL. Any other
+    scheme (javascript:, data:) is dropped, because the page opens this link on a click."""
     url = _str(raw)
     if url and url.startswith("/"):
         return base_url + url
-    return url
+    if url and url.lower().startswith(("http://", "https://")):
+        return url
+    return None
 
 
 def to_deployment(row: dict, base_url: str, uuid_by_name: dict[str, str]) -> Deployment:
@@ -255,7 +261,7 @@ def to_deployment(row: dict, base_url: str, uuid_by_name: dict[str, str]) -> Dep
     )
 
 
-# --- choosing the reader (M1 routing rule: reads go to the widest view) --------------------------
+# --- choosing the reader (the routing rule: reads go to the widest view) ------------------------
 
 @dataclass
 class _View:
@@ -626,7 +632,7 @@ def build_snapshot(connection: Connection, *, transport: Transport = urllib_tran
         for uuid in edge:
             if uuid not in histories:
                 fleet[uuid]["state"] = "unknown"  # past the window and not read yet this build
-        # M5, Roll back to last good: a failing app whose last finished deploy is older than the
+        # Roll back to last good: a failing app whose last finished deploy is older than the
         # finished list gets one history read (GOOD_TAKE rows), kept until it deploys again.
         lost = [u for u, row in fleet.items() if row.get("state") == "failing" and not row.get("last_good")]
         goods: dict[str, dict] = {}
@@ -855,12 +861,18 @@ def deployment_history(client: CoolifyClient, resource: dict, limit: int = HISTO
 
 
 # Fields of GET /deployments/{uuid} worth showing; logs are never passed on here (a token with
-# read:sensitive would return them, and log text goes through the M6 redaction path only).
+# read:sensitive would return them, and log text goes through the diagnosis redaction path only).
 DETAIL_FLAGS = ("force_rebuild", "is_webhook", "is_api", "rollback", "restart_only", "pull_request_id",
                 "only_this_server")
 
 
+DEPLOYMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
 def deployment_detail(client: CoolifyClient, deployment_uuid: str) -> dict[str, Any]:
+    if not DEPLOYMENT_ID.fullmatch(deployment_uuid or ""):  # it goes into the path: no `/`, `..` or `?`
+        raise ResourceLookupError(f"{str(deployment_uuid)[:80]!r} is not a deployment id (letters, digits, "
+                                  "- and _ only, as coolify_deployments lists them).")
     row = client.get(f"/deployments/{deployment_uuid}")
     if not isinstance(row, dict):
         raise CoolifyError(ErrorKind.SERVER, "unexpected deployment answer", path=f"/deployments/{deployment_uuid}")
@@ -941,7 +953,7 @@ def _where(by_uuid: dict[str, dict], uuid: Optional[str]) -> str:
 
 
 def _deployment_line(d: dict, by_uuid: dict[str, dict]) -> str:
-    message = (d.get("commit_message") or "").splitlines()[0][:70] if d.get("commit_message") else ""
+    message = commit_subject(d.get("commit_message"), 70)
     commit = (d.get("commit") or "")[:7]
     parts = [f"- {_when(d.get('created_at'))} {d.get('resource_name') or '?'}{_where(by_uuid, d.get('resource_uuid'))}",
              f"on {d['server_name']}" if d.get("server_name") else "",
@@ -1008,7 +1020,7 @@ def render_overview(snap: dict, *, project: Optional[str] = None, environment: O
     else:
         latest = [d for d in latest if d.get("status") in ("finished", "failed")
                   and (not filtered or d.get("resource_uuid") in shown_uuids)][:LATEST_IN_OVERVIEW]
-        lines.append(f"LATEST DEPLOYS, newest first, all environments (times UTC):" if latest
+        lines.append(f"LATEST DEPLOYS, newest first, all environments (times UTC; {COMMIT_NOTE}):" if latest
                      else "Latest deploys: none in the window")
         lines += [_deployment_line(d, by_uuid) + f" {d.get('status')}"
                   + (" (fixed since by a later deploy)" if d.get("superseded") else "")
@@ -1061,9 +1073,9 @@ def render_history(resource: dict, deployments: list[Deployment], *, max_chars: 
             f"status {resource.get('status')}, uuid {resource['uuid']}): ")
     if not deployments:
         return head + "no deployments recorded."
-    lines = [head + f"last {len(deployments)} deployments, newest first (times UTC):"]
+    lines = [head + f"last {len(deployments)} deployments, newest first (times UTC; {COMMIT_NOTE}):"]
     for d in deployments:
-        message = (d.commit_message or "").splitlines()[0][:70] if d.commit_message else ""
+        message = commit_subject(d.commit_message, 70)
         lines.append(f"- {_when(d.created_at)} {d.status}{_duration(d.created_at, d.finished_at)}"
                      f" commit {(d.commit or '?')[:7]}" + (f' "{message}"' if message else "")
                      + f" (deployment {d.uuid})")
@@ -1074,14 +1086,14 @@ def render_history(resource: dict, deployments: list[Deployment], *, max_chars: 
 
 
 def render_detail(detail: dict) -> str:
-    message = (detail.get("commit_message") or "").strip()
+    message = commit_subject(detail.get("commit_message"))
     lines = [f"Deployment {detail['uuid']} of {detail.get('resource_name')} ({detail.get('resource_uuid')}): "
              f"{detail.get('status')}",
              f"created {_when(detail.get('created_at'))} UTC, finished {_when(detail.get('finished_at'))} UTC"
              f"{_duration(detail.get('created_at'), detail.get('finished_at'))}",
              f"server {detail.get('server_name')}, commit {detail.get('commit')}"]
     if message:
-        lines.append("commit message: " + message[:300])
+        lines.append(f'commit message, first line ({COMMIT_NOTE}): "{message}"')
     if detail.get("flags"):
         lines.append("flags: " + ", ".join(f"{k}={v}" for k, v in detail["flags"].items()))
     if detail.get("url"):

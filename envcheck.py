@@ -1,12 +1,12 @@
 """The `env_changed` signal's reads: has an env variable changed since an application's last
-finished deployment? (PLAN-v0.1 -> Answers, measured on his instance: 1 of 26 flagged.)
+finished deployment? (Measured on a 26-application instance: 1 flagged.)
 
 One `GET /applications/{uuid}/envs` per application tells it: every env row carries `updated_at`,
 and a read token sees no values (measured). Two signals that do not work were measured too and
 are not used: `config_hash` against the deployment's `configuration_hash` (0 of 26 differ) and the
 application's own `updated_at` (26 of 26 newer; it moves on status checks).
 
-Cost and cadence (T5): one call per application, read again after ENV_TTL_S or as soon as the
+Cost and cadence: one call per application, read again after ENV_TTL_S or as soon as the
 application has a newer finished deployment, at most ENV_READS per round, oldest first. These
 reads use their own client outside the snapshot's rate watch, so a 429 here never blanks the
 dashboard: the round stops and the last known answers stay. The answers live in `env-check.json`

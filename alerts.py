@@ -1,4 +1,4 @@
-"""Alerts with Desktop closed (PLAN-v0.1 M6, T2, probe M0d).
+"""Alerts with Desktop closed.
 
 A plugin cannot create a scheduled job or deliver a message from a thread. Hermes' cron can run a
 script with no model turn and deliver its stdout as written; empty stdout delivers nothing. So the

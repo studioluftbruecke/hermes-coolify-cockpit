@@ -112,7 +112,7 @@ the rest to its `config.yaml`.
 | --- | --- | --- |
 | Coolify URL (`COOLIFYBRUECKE_URL`) | The address you open Coolify at | none |
 | API token (`COOLIFYBRUECKE_TOKEN`) | Reads and acts. Recommended: `read` and `deploy`, all projects | none |
-| Protected environments (`protected_environments`) | Comma-separated. The agent may not act there; your own clicks work | `production` |
+| Protected environments (`protected_environments`) | Comma-separated. The agent may not act there; your own clicks work. Left empty, it means `production` | `production` |
 | Agent may act on protected environments (`agent_on_protected`) | On: each agent action there still asks you, naming the environment | off |
 | Let the agent run actions (`agent_actions`) | Off: only your own clicks act | on |
 | Disk warning at (%) (`disk_warn_percent`) | A server at or over this disk use needs attention | 85 |
@@ -139,7 +139,11 @@ Which token setups unlock what, and the tool list: [docs/guide.md](docs/guide.md
 - **Approvals.** When the agent calls `coolify_action`, Hermes shows its approval prompt before
   anything is sent. Cron jobs, webhooks, the API server and single-query `hermes chat -q` or `-z`
   runs are refused without asking and without any request to Coolify. With Hermes' approvals off or
-  `/yolo` on, Hermes approves without asking, as for every other gated tool. Details:
+  `/yolo` on, Hermes approves without asking, as for every other gated tool. "Allow for this
+  session" or "Always" on the prompt applies to that one action on that one resource (for example
+  restarting `shop-api`): Hermes then runs it again without asking, for the session or for good,
+  until you remove its entry (`plugin_rule:coolify_action:<action>:<uuid>`) from `command_allowlist`
+  in the profile's `config.yaml`. Protected environments always ask. Details:
   [Actions and your approval](docs/guide.md#actions-and-your-approval).
 
 ## Disclosures
@@ -150,7 +154,9 @@ The plugin talks to the Coolify instance you configure, to Coolify's public rele
 the git hosts of your applications' repositories for "branch ahead". It calls nothing else.
 
 Every request to Coolify goes to `<your Coolify URL>/api/v1/...` or `<your Coolify URL>/mcp`, with
-one of your Coolify tokens as a Bearer token:
+one of your Coolify tokens as a Bearer token. A request to Coolify never follows a redirect: when the
+address answers with one (a login proxy in front of Coolify, for example), the call fails with an
+error that names where the redirect pointed, and nothing is sent there.
 
 | When | Requests |
 | --- | --- |
@@ -172,7 +178,8 @@ the answer and stores no value.
 How rights are detected: Coolify checks a token's right before it looks up the resource, so the
 right probes go to the made-up id `hermes-permission-probe-does-not-exist`. No real resource
 receives a write from this check. Coolify answers "not found" for a right the token holds and
-"missing permission" for one it lacks.
+"missing permission" for one it lacks. Any success for the made-up id (an empty answer, 204, `{}`)
+is not Coolify's answer: the check then names the address as not Coolify's API and claims no right.
 
 With `check_updates` on (the default), the plugin sends `GET
 https://cdn.coollabs.io/coolify/versions.json`, without any token or instance data, at most once
@@ -204,12 +211,17 @@ request carries the user agent `hermes-coolifybruecke` and no instance data.
 - A followed deployment's history looks its application up in the last snapshot, so polling it
   every 5 seconds reads only that history.
 - With the Desktop half switched on, Hermes Desktop polls only while it is open. The status-bar
-  chip reads the snapshot every 60 seconds and the token check every 5 minutes. The open Cockpit
+  chip reads the snapshot every 60 seconds and the token check every 5 minutes. It also reads the
+  plugin's own settings state (`GET /setup`, no Coolify request) once a minute; while the plugin is
+  off in the active profile, every 30 seconds at first and then at most every 5 minutes. While the
+  Cockpit page or its settings page is open and the setup is incomplete, that read runs every
+  4 seconds, so a saved value shows at once. The open Cockpit
   page shares those reads and adds: the snapshot every 15 seconds while a deployment runs or an
   action you sent is followed, a followed deployment's history every 5 seconds until it ends, the
   availability check and the action list every 5 minutes, the server charts of a longer range
   every 5 minutes, and the layout (every 15 seconds), the notebook (every 60 seconds) and the
-  alert job's state (every 60 seconds, on the settings page; one `hermes cron list --all` each),
+  alert job's state (every 60 seconds, on the settings page; at most one `hermes cron list --all`
+  per 60 seconds, its answer kept in `cron-list.json`),
   which are read on the Hermes backend and call no Coolify endpoint.
 - With alerts on, the cron job runs `hermes coolifybruecke tick` at the interval you chose
   (default every 5 minutes), whether Desktop is open or not. Each tick reads a fresh snapshot plus
@@ -226,7 +238,10 @@ is readable by whatever else runs as Hermes on that host, so give each token onl
 needs (see Setup).
 
 The git host token is sent only to `git_host`, or to github.com when `git_host` is empty and the
-token starts like a GitHub token; otherwise it is sent nowhere. The alert script reads no token: it
+token starts like a GitHub token; otherwise it is sent nowhere. A request carrying it never follows
+a redirect. A read without a token (a public repository) follows up to three redirects on the same
+host, as GitHub sends for a renamed repository, and never one to another host. The alert script
+reads no token: it
 starts `hermes coolifybruecke tick`, which reads the tokens through Hermes.
 
 ### Actions
@@ -242,9 +257,9 @@ would let that touch.
 `coolify_diagnose` reads a log only when you paste it or when a token holds `read:sensitive`. Log
 text is untrusted: secrets matching known formats (API tokens, bearer tokens, passwords in URLs,
 `KEY=value` with secret-looking names, the environment variables Coolify stores as one base64
-value, private keys) are masked first, and the lines the agent sees sit inside a block marked as
-data with a random nonce. Masking covers
-known formats only, so the log lines that are shown can still reach your model provider. So can the
+value, private keys) are masked first, then Hermes' own redactor masks what it knows as a second
+pass, and the lines the agent sees sit inside a block marked as data with a random nonce. The same
+masking applies to notebook entries and commit messages. Masking covers known formats only, so the log lines that are shown can still reach your model provider. So can the
 live data an `@coolify:` reference adds to a message.
 
 ### Alerts output
@@ -273,6 +288,7 @@ Everything the plugin writes lives in its data directory in the Hermes profile
 | `env-check.json` | Per app: when its env was last checked and the newest env change after its last good deploy. Timestamps only, never a value |
 | `server-metrics.json` | Server chart series for the 6 h, 24 h and 7 d ranges |
 | `branch-heads.json` | Per app: repository, host, branch, deployed commit, branch head, commit count when known, source and check time |
+| `cron-list.json` | Hermes' cron job list as `hermes cron list --all` printed it last (job ids, names, schedules), kept for 60 seconds so the settings page's poll starts no new process each time |
 | `alerts-state.json` | The alert job's open and pending items (signal, title, app or server id, times), keyed by the instance URL |
 | `<profile>/scripts/coolifybruecke-alerts.py` | The alert script. Written by `hermes coolifybruecke alerts on`, removed by `alerts off` |
 
@@ -290,7 +306,8 @@ through `hermes cron list --all` (for `alerts status` and `GET /alerts`). Hermes
 It talks only to this plugin's own routes (through Hermes) and to Hermes' session calls for the
 cockpit chat (create a session titled "Cockpit", open it as a tab, fill its draft; it never sends).
 The Alerts card's button uses the same chat. It stores one value on your machine, the Cockpit
-chat's session id per profile, in Hermes Desktop's plugin storage. Links open in your browser.
+chat's session id per profile, in Hermes Desktop's plugin storage. Links open in your browser
+through Desktop; where Desktop cannot open one, a notice names the address.
 
 ### Not included
 

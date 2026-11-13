@@ -1,5 +1,5 @@
 {
- "_source": "Shapes from Coolify 4.6.0 and cdn.coollabs.io (probes P5, P6); values synthetic.",
+ "_source": "Shapes from Coolify 4.6.0 and cdn.coollabs.io (measured against a live instance); values synthetic.",
  "authenticated_routes": {
   "GET /api/v1/version": [
    200,

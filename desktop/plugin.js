@@ -46,6 +46,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'coolifybruecke'
+// This half's version; equal to plugin.yaml's (a test checks). GET /setup names the Hermes half's.
+const VERSION = '0.2.5'
 const PATH = '/coolifybruecke'
 const TAG = '[' + ID + ']'
 const SESSION_TITLE = 'Cockpit'
@@ -184,12 +186,26 @@ function SidebarSection({ row, sdk }) {
 const SIDEBAR_SDK = { SIDEBAR_NAV_AREA, Switch, Input, jsx, jsxs, atom, useValue }
 let sidebarRow = null
 
-// Page-wide state shared by widgets that do not sit in one React subtree.
-const $pending = atom(null) // the action awaiting confirmation
-const $tracked = atom([]) // actions sent from this page, followed until their deployment ends
-const $diagnose = atom(null) // the deployment the diagnosis panel looks at
-const $chips = atom([]) // @coolify: context chips for the chat widget
-const $banner = atom(null) // { tone, title, text } shown at the top of the page
+// Page-wide state shared by widgets that do not sit in one React subtree, kept per profile: the
+// routes answer for the active profile only, so after a switch the page shows that profile's own
+// confirm, followed actions and banner, and stops polling the other profile's resources. Switching
+// back shows them again.
+const pageStates = new Map()
+
+function pageState(profile) {
+  let state = pageStates.get(profile)
+  if (!state) {
+    state = {
+      pending: atom(null), // the action awaiting confirmation
+      tracked: atom([]), // actions sent from this page, followed until their deployment ends
+      diagnose: atom(null), // the deployment the diagnosis panel looks at
+      chips: atom([]), // @coolify: context chips for the chat widget
+      banner: atom(null) // { tone, title, text } shown at the top of the page
+    }
+    pageStates.set(profile, state)
+  }
+  return state
+}
 
 function log(step, value) {
   try {
@@ -270,29 +286,53 @@ function IconButton({ icon, label, onClick, disabled }) {
     el(Codicon, { name: icon, size: '0.8rem' }))
 }
 
+// Links come from Coolify (deployment URLs) and from the settings. Only http and https open, and
+// only through Desktop's own opener; anything else renders as plain text. Where Desktop cannot open
+// a link (its web build resolves false), a notice names the address to open in a browser.
+function webUrl(href) {
+  try {
+    const { protocol } = new URL(String(href))
+    return protocol === 'http:' || protocol === 'https:' ? String(href) : null
+  } catch {
+    return null
+  }
+}
+
+function linkNotOpened(url, detail) {
+  log('link not opened', detail || url)
+  if (url && typeof host.notify === 'function') {
+    host.notify({ kind: 'warning', message: 'Desktop could not open this link. Open it in your browser: ' + url })
+  }
+}
+
 function openExternal(href) {
+  const url = webUrl(href)
   const os = pluginCtx && pluginCtx.os
-  Promise.resolve(os && typeof os.openExternal === 'function' ? os.openExternal(href) : false)
-    .then(ok => {
-      if (!ok) window.open(href, '_blank', 'noopener')
-    })
-    .catch(() => window.open(href, '_blank', 'noopener'))
+  if (!url || !os || typeof os.openExternal !== 'function') {
+    linkNotOpened(url, href)
+    return
+  }
+  Promise.resolve(os.openExternal(url)).then(
+    ok => ok || linkNotOpened(url),
+    error => linkNotOpened(url, { url, error: String(error) })
+  )
 }
 
 function ExternalLink({ href, children }) {
-  if (!href) return children
+  const url = webUrl(href)
+  if (!url) return children
   return el(
     'a',
     {
-      href,
+      href: url,
       onClick: event => {
         event.preventDefault()
-        openExternal(href)
+        openExternal(url)
       },
       rel: 'noreferrer',
       style: { color: T.accent, textDecoration: 'none' },
       target: '_blank',
-      title: href
+      title: url
     },
     children
   )
@@ -431,24 +471,44 @@ function useProfile() {
   return useValue(host.state.profile) || ''
 }
 
+const usePageState = () => pageState(useProfile())
+const currentPageState = () => pageState(readAtom('profile') || '')
+
 const qk = (profile, ...rest) => [ID, profile, ...rest]
 
 function fastPoll(query) {
   const running = (((query.state.data || {}).deployments || {}).running || []).length > 0
-  const followed = $tracked.get().some(t => !t.done)
+  const followed = pageState(query.queryKey[1]).tracked.get().some(t => !t.done)
   return running || followed
 }
 
-// The settings, without a Coolify request (GET /setup). Polled every few seconds while something is
-// missing, so a value saved in the settings form shows here without a reload.
-function useSetup() {
+// The settings, without a Coolify request (GET /setup). While the page or the settings page is open
+// (`watching`) and something is missing, it is asked every 4 s, so a value saved in the settings form
+// or the Hermes half switched on shows without a reload. The status-bar chip is always mounted, so
+// on its own it asks once a minute, and while this profile's Hermes half is off (404) it backs off
+// from 30 s to 5 min. A 404 is not retried.
+const SETUP_FAST_MS = 4000
+const SETUP_IDLE_MS = 60000
+const SETUP_OFF_FIRST_MS = 30000
+const SETUP_OFF_MAX_MS = 300000
+
+function setupInterval(state, watching) {
+  if (state.data && state.data.configured) return SETUP_IDLE_MS
+  if (watching) return SETUP_FAST_MS
+  if (state.error && state.error.status === 404) {
+    return Math.min(SETUP_OFF_MAX_MS, SETUP_OFF_FIRST_MS * 2 ** Math.max(0, (state.errorUpdateCount || 1) - 1))
+  }
+  return SETUP_IDLE_MS
+}
+
+function useSetup(watching = false) {
   const profile = useProfile()
   return useQuery({
     queryKey: qk(profile, 'setup'),
     queryFn: () => rest('/setup'),
-    refetchInterval: query => (query.state.data && query.state.data.configured ? 60000 : 4000),
+    refetchInterval: query => setupInterval(query.state, watching),
     staleTime: 2000,
-    retry: retryOnce
+    retry: (failures, error) => error.status !== 404 && retryOnce(failures, error)
   })
 }
 
@@ -598,7 +658,7 @@ function useRights() {
 // ── actions: confirm, send, follow ───────────────────────────────────────────────────────────────
 
 function requestAction(kind, target, extra) {
-  $pending.set({ kind, target, ...(extra || {}), at: Date.now() })
+  currentPageState().pending.set({ kind, target, ...(extra || {}), at: Date.now() })
 }
 
 function ActionButton({ kind, label, target, resource, deployment, params, rights, variant }) {
@@ -630,17 +690,19 @@ function PlanLine({ name, value }) {
 // confirm button stays disabled until the dry run succeeded, and "Check again" re-runs the dry run
 // (POST /actions plans and checks again on the server in any case).
 function ActionConfirm() {
-  const pending = useValue($pending)
+  const page = usePageState()
+  const pending = useValue(page.pending)
   const profile = useProfile()
   const client = useQueryClient()
   const catalog = useActionCatalog() // the page's cached catalog: names the action while the check runs
-  const [sendState, setSendState] = useState('idle') // idle | sending | sent
-  const [sendError, setSendError] = useState(null)
+  const [sendState, setSendState] = useState('idle') // idle | sending | sent | failed
+  const [sendError, setSendError] = useState(null) // { error, sent: names, failed: target }
+  const [unsent, setUnsent] = useState(null) // a bulk send that failed: the targets it did not send
   const confirmRef = useRef(null)
   const cancelRef = useRef(null)
   const closeTimer = useRef(null)
   const caps = useCapabilities()
-  // M5 "Redeploy what changed": one confirm for several apps. Each target gets its own dry run (the
+  // "Redeploy what changed": one confirm for several apps. Each target gets its own dry run (the
   // server plans and checks each, as for one click); the dialog lists them all, one click sends all.
   const plan = useQuery({
     queryKey: qk(profile, 'plan', pending && pending.at),
@@ -661,6 +723,7 @@ function ActionConfirm() {
   useEffect(() => {
     setSendState('idle')
     setSendError(null)
+    setUnsent(null)
   }, [pending && pending.at])
   useEffect(() => {
     if (ready && confirmRef.current) confirmRef.current.focus()
@@ -674,74 +737,69 @@ function ActionConfirm() {
   const name = (data && data.bulk ? pending.resourceName : target.name) || pending.resourceName || pending.target
   const busy = sendState !== 'idle'
   const close = () => {
-    if (sendState !== 'sending') $pending.set(null)
+    if (sendState !== 'sending') page.pending.set(null)
   }
-  const sendBulk = async () => {
-    const sent = []
-    for (const p of data.bulk) {
-      const result = await rest('/actions', { method: 'POST', body: { kind: pending.kind, target: p.target.uuid } })
-      sent.push({
-        id: pending.at + '-' + p.target.uuid,
-        kind: result.kind || pending.kind,
-        label: kindLabel,
-        resourceName: p.target.name,
-        resourceUuid: p.target.uuid,
-        deploymentUuid: result.deployment_uuid || null,
-        message: result.message || '',
-        sentAt: new Date().toISOString(),
-        mine: true,
-        done: !result.deployment_uuid
-      })
-    }
-    log('bulk sent', { kind: pending.kind, count: sent.length })
-    $tracked.set(sent.concat($tracked.get()).slice(0, 8))
-    void client.invalidateQueries({ queryKey: qk(profile, 'snapshot') })
-  }
+  // One request per target, in order. Whatever was sent is followed on the page even when a later
+  // target fails. A failure disarms the confirm: the request may have landed (a 502 carries
+  // sent: true), so a second click must not repeat it. Check again plans anew, for a bulk send
+  // only the targets that were not sent.
   const send = async () => {
     if (!ready || busy) return
     setSendError(null)
     setSendState('sending')
+    const targets = data.bulk ? data.bulk.map(p => p.target) : [target]
+    const sent = []
     try {
-      if (data.bulk) {
-        await sendBulk()
-        setSendState('sent')
-        closeTimer.current = window.setTimeout(() => {
-          closeTimer.current = null
-          $pending.set(null)
-        }, 600)
-        return
+      for (const t of targets) {
+        const body = data.bulk ? { kind: pending.kind, target: t.uuid } : { kind: pending.kind, target: pending.target, params: pending.params }
+        const result = await rest('/actions', { method: 'POST', body })
+        log('action sent', { kind: result.kind, target: t.uuid, deployment: result.deployment_uuid, ok: result.ok })
+        sent.push({
+          id: data.bulk ? pending.at + '-' + t.uuid : pending.at,
+          kind: result.kind || pending.kind,
+          label: kindLabel,
+          resourceName: data.bulk ? t.name : name,
+          resourceUuid: t.kind === 'deployment' ? t.resource_uuid : t.uuid || pending.resourceUuid,
+          deploymentUuid: result.deployment_uuid || null,
+          message: result.message || '',
+          sentAt: new Date().toISOString(),
+          mine: true,
+          done: !result.deployment_uuid
+        })
       }
-      const result = await rest('/actions', { method: 'POST', body: { kind: pending.kind, target: pending.target, params: pending.params } })
-      log('action sent', { kind: result.kind, deployment: result.deployment_uuid, ok: result.ok })
-      $tracked.set(
-        [
-          {
-            id: pending.at,
-            kind: result.kind || pending.kind,
-            label: kindLabel,
-            resourceName: name,
-            resourceUuid: target.kind === 'deployment' ? target.resource_uuid : target.uuid || pending.resourceUuid,
-            deploymentUuid: result.deployment_uuid || null,
-            message: result.message || '',
-            sentAt: new Date().toISOString(),
-            mine: true,
-            done: !result.deployment_uuid
-          }
-        ].concat($tracked.get().slice(0, 4))
-      )
-      void client.invalidateQueries({ queryKey: qk(profile, 'snapshot') })
-      if (target.uuid) void client.invalidateQueries({ queryKey: qk(profile, 'history', target.uuid) })
-      setSendState('sent')
-      closeTimer.current = window.setTimeout(() => {
-        closeTimer.current = null
-        $pending.set(null)
-      }, 600)
     } catch (error) {
-      setSendState('idle')
-      setSendError(error)
+      const sentUuids = new Set(sent.map(row => row.resourceUuid))
+      setUnsent(data.bulk ? data.bulk.filter(p => !sentUuids.has(p.target.uuid)) : null)
+      setSendError({ error, sent: sent.map(row => row.resourceName), failed: targets[sent.length] })
+      setSendState('failed')
+      return
+    } finally {
+      if (sent.length) {
+        page.tracked.set(sent.concat(page.tracked.get()).slice(0, 8))
+        void client.invalidateQueries({ queryKey: qk(profile, 'snapshot') })
+        for (const row of sent) if (row.resourceUuid) void client.invalidateQueries({ queryKey: qk(profile, 'history', row.resourceUuid) })
+      }
     }
+    setSendState('sent')
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null
+      page.pending.set(null)
+    }, 600)
   }
-  const failure = error =>
+  const checkAgain = () => {
+    if (!unsent) {
+      page.pending.set({ ...pending, at: Date.now() })
+      return
+    }
+    const n = unsent.length
+    page.pending.set({
+      ...pending,
+      at: Date.now(),
+      bulk: unsent.map(p => ({ uuid: p.target.uuid, name: p.target.name, environment: p.target.environment })),
+      resourceName: n + (n === 1 ? ' app' : ' apps') + ' with changed env'
+    })
+  }
+  const failure = (error, extra) =>
     el(
       Note,
       { tone: 'bad' },
@@ -750,8 +808,23 @@ function ActionConfirm() {
         ? el('div', { style: { ...S.small, marginTop: 4 } }, RATE_LIMIT_DETAIL)
         : error.body && error.body.hint
           ? el('div', { style: { ...S.small, marginTop: 4 } }, error.body.hint)
-          : undefined
+          : undefined,
+      extra ? el('div', { style: { ...S.small, marginTop: 4 } }, extra) : undefined
     )
+  const sendFailure = failed => {
+    const lines = []
+    if (failed.sent.length) lines.push('Sent: ' + failed.sent.join(', ') + '.')
+    if (failed.error.body && failed.error.body.sent === true) {
+      lines.push('The request for ' + ((failed.failed && failed.failed.name) || name) + ' reached Coolify and may have run. Look at it before you send again.')
+    } else if (failed.error.body && failed.error.body.sent === false) {
+      const target = (failed.failed && failed.failed.name) || name
+      lines.push(failed.error.body.error === 'unreachable'
+        ? 'The request for ' + target + ' did not reach Coolify, so it did not run.'
+        : 'The request for ' + target + ' was not sent, so it did not run.')
+    }
+    lines.push(unsent ? 'Check again plans what was not sent.' : 'Check again plans a new send.')
+    return failure(failed.error, lines.join('\n'))
+  }
   const protectedEnv = env => isProtected(caps, env)
   const body = checking
     ? el('div', { style: S.col(6) }, el(Skeleton, { style: { height: 14, width: '70%' } }), el(Skeleton, { style: { height: 14, width: '50%' } }))
@@ -788,12 +861,14 @@ function ActionConfirm() {
             : null,
           protectedEnv(target.environment) ? el(Note, { tone: 'bad' }, 'This is ' + target.environment + '.') : null
         )
-  const description = ready
+  const description = sendState === 'failed'
+    ? 'The send failed. The button stays off until you check again.'
+    : ready
     ? 'Coolify will ' + data.confirm_text + '.'
     : checkFailed
       ? 'The check did not finish, so nothing can be sent yet.'
       : 'Checking what this click would do.'
-  const confirmLabel = sendState === 'sending' ? 'Sending' : sendState === 'sent' ? 'Sent' : data && data.bulk ? 'Redeploy ' + data.bulk.length + ' apps' : kindLabel + ' ' + (name.length > 28 ? 'now' : name)
+  const confirmLabel = sendState === 'sending' ? 'Sending' : sendState === 'sent' ? 'Sent' : data && data.bulk ? 'Redeploy ' + data.bulk.length + (data.bulk.length === 1 ? ' app' : ' apps') : kindLabel + ' ' + (name.length > 28 ? 'now' : name)
   return el(
     Dialog,
     { onOpenChange: open => !open && close(), open: true },
@@ -802,15 +877,10 @@ function ActionConfirm() {
       {
         className: 'max-w-md',
         'data-cockpit': 'action-confirm',
-        onKeyDown: event => {
-          if (event.key === 'Enter' && ready && !busy) {
-            event.preventDefault()
-            void send()
-          }
-        },
         onOpenAutoFocus: event => {
           // Keep focus inside the dialog (Enter on the page's button would open a second one);
-          // the confirm button takes it once the check has passed.
+          // the confirm button takes it once the check has passed. Enter clicks the focused button;
+          // an Enter handler on the dialog would also catch Enter on Cancel and send.
           event.preventDefault()
           if (cancelRef.current) cancelRef.current.focus()
         }
@@ -822,12 +892,13 @@ function ActionConfirm() {
         el(DialogDescription, {}, description)
       ),
       body,
-      sendError ? failure(sendError) : null,
+      sendError ? sendFailure(sendError) : null,
       el(
         DialogFooter,
         {},
         el(Button, { disabled: sendState === 'sending', onClick: close, ref: cancelRef, variant: 'ghost' }, 'Cancel'),
         checkFailed ? el(Button, { onClick: () => void plan.refetch(), variant: 'secondary' }, 'Check again') : null,
+        sendState === 'failed' ? el(Button, { onClick: checkAgain, variant: 'secondary' }, 'Check again') : null,
         el(
           Button,
           {
@@ -835,7 +906,7 @@ function ActionConfirm() {
             disabled: !ready || busy,
             onClick: () => void send(),
             ref: confirmRef,
-            title: ready ? undefined : checkFailed ? 'The check failed; check again first.' : 'Still checking.',
+            title: sendState === 'failed' ? 'The send failed; check again first.' : ready ? undefined : checkFailed ? 'The check failed; check again first.' : 'Still checking.',
             variant: pending.kind === 'stop' || pending.kind === 'cancel' ? 'destructive' : 'default'
           },
           sendState === 'sending' ? el(Codicon, { name: 'loading', size: '0.8rem', spinning: true }) : sendState === 'sent' ? el(Codicon, { name: 'check', size: '0.8rem' }) : null,
@@ -852,16 +923,17 @@ function paramText(params) {
 }
 
 function TrackedAction({ item }) {
+  const page = usePageState()
   const fast = !item.done
   const history = useHistory(item.deploymentUuid ? item.resourceUuid : null, fast)
   const row = ((history.data && history.data.deployments) || []).find(d => d.uuid === item.deploymentUuid)
   const status = row ? row.status : item.deploymentUuid ? 'queued' : 'sent'
   useEffect(() => {
     if (row && TERMINAL.has(row.status) && !item.done) {
-      $tracked.set($tracked.get().map(t => (t.id === item.id ? { ...t, done: true, status: row.status } : t)))
+      page.tracked.set(page.tracked.get().map(t => (t.id === item.id ? { ...t, done: true, status: row.status } : t)))
       log('deployment ended', { uuid: row.uuid, status: row.status })
-      // M5 follow-through: a deploy he started that fails opens its diagnosis without a click.
-      if (row.status === 'failed' && item.mine) $diagnose.set({ ...row, resource_name: item.resourceName, resource_uuid: item.resourceUuid, at: Date.now(), followed: true })
+      // A deploy the user started here that fails opens its diagnosis without a click.
+      if (row.status === 'failed' && item.mine) page.diagnose.set({ ...row, resource_name: item.resourceName, resource_uuid: item.resourceUuid, at: Date.now(), followed: true })
     }
   }, [row && row.status])
   const tone = item.deploymentUuid ? deploymentTone(status) : 'good'
@@ -883,12 +955,13 @@ function TrackedAction({ item }) {
     ),
     row && row.url ? el(ExternalLink, { href: row.url }, el(Small, { style: { color: T.accent } }, 'Open in Coolify')) : null,
     !item.done ? el(Codicon, { name: 'loading', size: '0.8rem', spinning: true, style: { color: T.tertiary } }) : null,
-    el(IconButton, { icon: 'close', label: 'Dismiss', onClick: () => $tracked.set($tracked.get().filter(t => t.id !== item.id)) })
+    el(IconButton, { icon: 'close', label: 'Dismiss', onClick: () => page.tracked.set(page.tracked.get().filter(t => t.id !== item.id)) })
   )
 }
 
 function ActionTracker() {
-  const tracked = useValue($tracked)
+  const page = usePageState()
+  const tracked = useValue(page.tracked)
   if (!tracked.length) return null
   return el('div', { style: S.col(6) }, ...tracked.map(item => el(TrackedAction, { item, key: item.id })))
 }
@@ -972,8 +1045,9 @@ async function openCockpitChat(text) {
 }
 
 function addChip(chip) {
-  const list = $chips.get().filter(c => c.ref !== chip.ref)
-  $chips.set([chip].concat(list).slice(0, 6))
+  const { chips } = currentPageState()
+  const list = chips.get().filter(c => c.ref !== chip.ref)
+  chips.set([chip].concat(list).slice(0, 6))
 }
 
 function refFor(resource) {
@@ -1122,7 +1196,7 @@ function TokenBlock({ token, showProjects }) {
   )
 }
 
-// 0.2.4 "Check again": { profile, running, at } shared by every place that shows the button, so the
+// "Check again": { profile, running, at } shared by every place that shows the button, so the
 // settings page and the cockpit's Connection widget show one check. `at` is when the last click
 // finished (ISO); a successful check shows the backend's own checked_at instead.
 const $check = atom({ profile: null, running: false, at: null })
@@ -1235,8 +1309,8 @@ function ProtectedLine({ protectedEnvs }) {
   )
 }
 
-function ConnectionWidget({ widget }) {
-  const setup = useSetup()
+function ConnectionWidget({ widget, watching }) {
+  const setup = useSetup(Boolean(watching))
   const setupNow = setupState(setup)
   const caps = useCapabilities()
   const props = widget.props || {}
@@ -1321,7 +1395,7 @@ function ConnectionWidget({ widget }) {
   )
 }
 
-// ── 0.1.0 shared: the attention data (fleet.py) ─────────────────────────────────────────────────
+// ── shared: the attention data (fleet.py) ─────────────────────────────────────────────────────────
 //
 // The backend's Attention list is the only place a count comes from. Every block below reads
 // snap.attention, snap.summary and snap.fleet; nothing counts on its own.
@@ -1485,9 +1559,10 @@ function LatestRow({ d, rights, fleet, open, onDiagnose }) {
 }
 
 function DeploymentsWidget({ widget }) {
+  const page = usePageState()
   const snap = useSnapshot()
   const rights = useRights()
-  const selected = useValue($diagnose)
+  const selected = useValue(page.diagnose)
   const props = widget.props || {}
   if (snap.isLoading) return el(Loading, { rows: 4 })
   if (snap.error) return el(QueryError, { error: snap.error, what: 'Snapshot' })
@@ -1512,7 +1587,7 @@ function DeploymentsWidget({ widget }) {
         d,
         fleet,
         open: Boolean(selected && selected.uuid === d.uuid),
-        onDiagnose: () => $diagnose.set(selected && selected.uuid === d.uuid ? null : { ...d, at: Date.now() }),
+        onDiagnose: () => page.diagnose.set(selected && selected.uuid === d.uuid ? null : { ...d, at: Date.now() }),
         rights
       })
     )
@@ -1532,6 +1607,7 @@ function statusMatches(status, filter, attention) {
 }
 
 function HistoryRows({ resource }) {
+  const page = usePageState()
   const history = useHistory(resource.uuid, false)
   if (history.isLoading) return el(Loading, { rows: 2 })
   if (history.error) return el(QueryError, { error: history.error })
@@ -1548,7 +1624,7 @@ function HistoryRows({ resource }) {
         el(Small, { style: { ...S.mono, color: T.secondary } }, shortSha(d.commit) || '?'),
         el(Small, { style: { ...S.ellipsis, flex: 1 } }, firstLine(d.commit_message) || d.status),
         el(Small, {}, ago(d.created_at) + (d.finished_at ? ', ' + duration(d.created_at, d.finished_at) : '')),
-        d.status === 'failed' ? el(Button, { onClick: () => $diagnose.set({ ...d, resource_name: resource.name, at: Date.now() }), size: 'xs', variant: 'ghost' }, 'Diagnose') : null,
+        d.status === 'failed' ? el(Button, { onClick: () => page.diagnose.set({ ...d, resource_name: resource.name, at: Date.now() }), size: 'xs', variant: 'ghost' }, 'Diagnose') : null,
         d.url ? el(ExternalLink, { href: d.url }, el(Codicon, { name: 'link-external', size: '0.7rem' })) : null
       )
     )
@@ -1709,7 +1785,7 @@ function ResourcesWidget({ widget }) {
   )
 }
 
-// ── servers (A15: his 0.0.11 cards, with range, deploy ticks, hover, peak, disk estimate) ────────
+// ── servers (cards with range, deploy ticks, hover, peak, disk estimate) ─────────────────────────
 
 const RANGES = [
   { id: '1h', label: '1 h', minutes: 60 },
@@ -2111,7 +2187,8 @@ function NotebookWidget({ widget }) {
 const DEFAULT_SUGGESTIONS = ['Why did the last staging deploy fail?', 'Is any server overloaded?', 'What changed on this instance this week?']
 
 function ChatWidget({ widget }) {
-  const chips = useValue($chips)
+  const page = usePageState()
+  const chips = useValue(page.chips)
   const [text, setText] = useState('')
   const [state, setState] = useState({ busy: false, result: null })
   const suggestions = (widget.props && widget.props.suggestions && widget.props.suggestions.length ? widget.props.suggestions : DEFAULT_SUGGESTIONS).slice(0, 6)
@@ -2141,7 +2218,7 @@ function ChatWidget({ widget }) {
           'span',
           { key: chip.ref, style: { ...S.row(4), borderRadius: 4, padding: '1px 4px 1px 6px', background: tint(T.accent, 12), color: T.primary, fontSize: '0.6875rem' }, title: chip.ref },
           el('span', { style: S.mono }, chip.ref.replace(/^@coolify:/, '@')),
-          el(IconButton, { icon: 'close', label: 'Remove ' + chip.ref, onClick: () => $chips.set($chips.get().filter(c => c.ref !== chip.ref)) })
+          el(IconButton, { icon: 'close', label: 'Remove ' + chip.ref, onClick: () => page.chips.set(page.chips.get().filter(c => c.ref !== chip.ref)) })
         )
       ),
       ...quick.map(q => el(Button, { key: q.ref, onClick: () => addChip(q), size: 'xs', variant: 'ghost' }, el(Codicon, { name: 'add', size: '0.7rem' }), q.label))
@@ -2438,17 +2515,19 @@ function EditToolbar({ catalog, draft, setDraft, dirty, saving, onSave, onCancel
 }
 
 function Banner() {
-  const banner = useValue($banner)
+  const page = usePageState()
+  const banner = useValue(page.banner)
   if (!banner) return null
-  return el(Note, { tone: banner.tone, action: el(IconButton, { icon: 'close', label: 'Dismiss', onClick: () => $banner.set(null) }) }, el('strong', {}, banner.title), banner.text ? '\n' + banner.text : '')
+  return el(Note, { tone: banner.tone, action: el(IconButton, { icon: 'close', label: 'Dismiss', onClick: () => page.banner.set(null) }) }, el('strong', {}, banner.title), banner.text ? '\n' + banner.text : '')
 }
 
 function StandaloneDiagnosis({ hasWidget }) {
-  const selected = useValue($diagnose)
+  const page = usePageState()
+  const selected = useValue(page.diagnose)
   if (!selected || hasWidget) return null
   return el(
     Card,
-    { right: el(IconButton, { icon: 'close', label: 'Close diagnosis', onClick: () => $diagnose.set(null) }), title: 'Diagnosis' },
+    { right: el(IconButton, { icon: 'close', label: 'Close diagnosis', onClick: () => page.diagnose.set(null) }), title: 'Diagnosis' },
     el(DiagnosisPanel, { deployment: selected, pasteBox: true })
   )
 }
@@ -2473,9 +2552,10 @@ function useColdStart(waiting) {
 }
 
 function CockpitPage() {
+  const page = usePageState()
   const profile = useProfile()
   const client = useQueryClient()
-  const setup = useSetup()
+  const setup = useSetup(true)
   const setupNow = setupState(setup)
   const layoutQ = useLayout()
   const snap = useSnapshot()
@@ -2496,7 +2576,7 @@ function CockpitPage() {
   useEffect(() => {
     if (!saved) return
     if (lastVersion.current != null && saved.version !== lastVersion.current && saved.updated_by && saved.updated_by !== 'pane' && !editing) {
-      $banner.set({ tone: null, title: 'Layout updated by ' + saved.updated_by, text: 'Version ' + saved.version + ' at ' + (saved.updated_at || 'just now') + '.' })
+      page.banner.set({ tone: null, title: 'Layout updated by ' + saved.updated_by, text: 'Version ' + saved.version + ' at ' + (saved.updated_at || 'just now') + '.' })
     }
     lastVersion.current = saved.version
   }, [saved && saved.version])
@@ -2513,7 +2593,7 @@ function CockpitPage() {
   const applyServerLayout = (layout, conflict) => {
     client.setQueryData(qk(profile, 'layout'), old => ({ ...(old || {}), layout }))
     if (conflict) {
-      $banner.set({
+      page.banner.set({
         tone: 'warn',
         title: 'The layout changed while you were editing',
         text: 'Version ' + layout.version + ' was saved by ' + (layout.updated_by || 'someone else') + (layout.updated_at ? ' ' + ago(layout.updated_at) : '') + ' while you edited version ' + (conflict.expected_version != null ? conflict.expected_version : '?') + '. The page reloaded it; your edits were not saved. Make them again and save.'
@@ -2528,7 +2608,7 @@ function CockpitPage() {
       const out = await rest('/layout', { method: 'PUT', body: { expected_version: draft.base_version, layout: { preset: draft.preset, widgets: draft.widgets } } })
       client.setQueryData(qk(profile, 'layout'), old => ({ ...(old || {}), layout: out.layout }))
       lastVersion.current = out.layout.version
-      $banner.set({ tone: 'good', title: 'Layout saved as version ' + out.layout.version, text: 'The agent sees the same layout (coolify_cockpit).' })
+      page.banner.set({ tone: 'good', title: 'Layout saved as version ' + out.layout.version, text: 'The agent sees the same layout (coolify_cockpit).' })
       stopEdit()
     } catch (error) {
       if (error.status === 409 && error.body && error.body.layout) {
@@ -2536,7 +2616,7 @@ function CockpitPage() {
         await client.invalidateQueries({ queryKey: qk(profile, 'layout') })
       } else {
         const list = error.body && error.body.errors ? '\n' + error.body.errors.join('\n') : ''
-        $banner.set({ tone: 'bad', title: 'The layout was not saved', text: plain(error.message) + list })
+        page.banner.set({ tone: 'bad', title: 'The layout was not saved', text: plain(error.message) + list })
       }
     } finally {
       setSaving(false)
@@ -2562,7 +2642,7 @@ function CockpitPage() {
       await client.invalidateQueries({ queryKey: qk(profile, 'capabilities') })
       await client.invalidateQueries({ queryKey: qk(profile, 'layout') })
     } catch (error) {
-      $banner.set({ tone: 'bad', title: 'Refresh failed', text: error.message })
+      page.banner.set({ tone: 'bad', title: 'Refresh failed', text: error.message })
     } finally {
       setRefreshing(false)
     }
@@ -2572,10 +2652,10 @@ function CockpitPage() {
   const availById = new Map(((avail.data && avail.data.availability) || []).map(row => [row.id, row]))
   const types = new Map(((layoutQ.data && layoutQ.data.widget_types) || []).map(t => [t.type, t]))
   const inst = (caps.data && caps.data.instance) || {}
-  const diagnosing = useValue($diagnose)
+  const diagnosing = useValue(page.diagnose)
   const shownDeploy = Boolean(diagnosing && ((snap.data && snap.data.latest_deployments) || []).slice(0, 8).some(d => d.uuid === diagnosing.uuid))
   const running = (((snap.data || {}).deployments || {}).running || []).length
-  const tracked = useValue($tracked)
+  const tracked = useValue(page.tracked)
   const fast = running > 0 || tracked.some(t => !t.done)
   const anyError = setup.error || layoutQ.error || snap.error || caps.error
   const coldStart = useColdStart(!anyError && (setup.isLoading || layoutQ.isLoading || (setupNow === 'ready' && (snap.isLoading || caps.isLoading))))
@@ -2593,7 +2673,7 @@ function CockpitPage() {
         el('h1', { style: { margin: 0, fontSize: '0.9375rem', fontWeight: 600, color: T.primary } }, 'Coolifybrücke'),
         inst.url ? el(ExternalLink, { href: inst.url }, el(Small, { style: { color: T.accent } }, hostOf(inst.url))) : null,
         inst.coolify_version ? el(Small, {}, 'v' + inst.coolify_version) : null,
-        // A14: the header carries no counts; the summary row is the only place a count shows.
+        // The header carries no counts; the summary row is the only place a count shows.
         caps.data && caps.data.setup && caps.data.setup.line
           ? el(IconButton, { icon: caps.data.setup.tone === 'good' ? 'key' : 'warning', label: caps.data.setup.line + '. Open settings.', onClick: () => host.navigate(settingsHref(profile)) })
           : null,
@@ -2615,6 +2695,7 @@ function CockpitPage() {
         onboarding ? null : el(AskButton, { kind: 'overview', item: {}, label: 'Ask' }),
         editing || onboarding ? null : el(Button, { disabled: !saved, onClick: startEdit, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'edit', size: '0.75rem' }), 'Edit')
       ),
+      el(VersionNote, {}),
       el(Banner, {}),
       coldStart ? el('div', { 'data-cc-notice': 'cold-start', role: 'status' }, el(Note, {}, COLD_START_TEXT)) : null,
       onboarding ? el(SetupPanel, { data: setup.data, state: setupNow }) : null,
@@ -2647,7 +2728,7 @@ function CockpitPage() {
           dirty,
           onApplied: (layout, conflict) => {
             applyServerLayout(layout, conflict)
-            if (!conflict) $banner.set({ tone: 'good', title: 'Preset applied as version ' + layout.version, text: null })
+            if (!conflict) page.banner.set({ tone: 'good', title: 'Preset applied as version ' + layout.version, text: null })
             setPreset(null)
           },
           onClose: () => setPreset(null),
@@ -2698,7 +2779,7 @@ function SetupStep({ n, done, optional, title, status, children, action }) {
   )
 }
 
-// 0.1.0 (PLAN-v0.1, Tokens and setup): two steps, each one line and one button. The detail sits
+// Two steps, each one line and one button. The detail sits
 // behind "Why?". The optional read-only token never shows here: the result line offers it when the
 // saved token is limited to some projects.
 function SetupPanel({ state, data }) {
@@ -2754,7 +2835,8 @@ function SettingsPage() {
   return el(
     'div',
     { style: S.col(12) },
-    el(Card, { title: 'Connection and token' }, el(ConnectionWidget, { widget: { props: { show_warnings: true, show_projects: false } } })),
+    el(VersionNote, {}),
+    el(Card, { title: 'Connection and token' }, el(ConnectionWidget, { watching: true, widget: { props: { show_warnings: true, show_projects: false } } })),
     el(AlertsCard, {}),
     sidebarRow ? jsx(SidebarSection, { row: sidebarRow, sdk: SIDEBAR_SDK }) : null,
     el(TwoPlaceNote, {})
@@ -2768,6 +2850,21 @@ function SettingsPage() {
 const NO_CONNECTION = atom(null)
 const TWO_PLACE_TIP = 'No Hermes on this computer: Capabilities → Plugins → Install from Git with this plugin\'s repository, Force reinstall.'
 
+// Desktop loads this file from its own computer and Hermes loads the rest from wherever it runs, so
+// the two halves update separately. When GET /setup names another version than this file, say so
+// once at the top: an older half shows as unknown widget types or missing fields otherwise. A
+// backend that does not name its version gets no note.
+function VersionNote() {
+  const setup = useSetup()
+  const theirs = setup.data && typeof setup.data.version === 'string' ? setup.data.version : null
+  if (!theirs || theirs === VERSION) return null
+  return el(
+    'div',
+    { 'data-cc-version': theirs },
+    el(Note, { tone: 'warn' }, 'This page is Coolifybrücke ' + VERSION + ', the Hermes half is ' + theirs + '. Update the older one (hermes plugins update ' + ID + '), then Rescan plugins.')
+  )
+}
+
 function TwoPlaceNote() {
   const id = useValue((host.state && host.state.connectionId) || NO_CONNECTION)
   if (id === 'local') return null
@@ -2777,7 +2874,7 @@ function TwoPlaceNote() {
       el('code', null, 'hermes plugins update ' + ID), ', then Rescan.'))
 }
 
-// 0.1.0 M6: alerts run as a Hermes cron job without a model turn (GET /alerts reads it back). The
+// Alerts run as a Hermes cron job without a model turn (GET /alerts reads it back). The
 // page cannot create a job; the button drafts the request to Hermes, which creates it in that chat.
 function useAlerts() {
   const profile = useProfile()
@@ -2871,12 +2968,14 @@ function CockpitChip() {
 export default {
   id: ID,
   name: 'Coolifybrücke',
+  version: VERSION,
   description: 'What needs you on your Coolify instance: failing apps, latest deploys, servers. Deploy and restart behind a confirm.',
   defaultEnabled: false,
   register(ctx) {
     pluginCtx = ctx
     ctx.register({ id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => jsx(CockpitPage, {}) })
-    // The sidebar row: brand, show switch and position from this Desktop's storage (D3: 54).
+    // The sidebar row: brand, show switch and position from this Desktop's storage (default 54,
+    // below Kanban at 50).
     sidebarRow = startSidebarRow(ctx, { brand: 'Coolifybrücke', path: PATH, codicon: 'cloud', defaultPosition: 54, sdk: SIDEBAR_SDK })
     ctx.register({ id: 'chip', area: STATUSBAR_AREAS.right, order: 70, render: () => jsx(CockpitChip, {}) })
     // Settings, Plugins: the same name and icon as the sidebar row. Desktop folds the plugin's

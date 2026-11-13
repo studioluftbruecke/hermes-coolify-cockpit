@@ -1,16 +1,16 @@
 """Coolify lifecycle actions: the ActionSpec registry, the rights check and `execute()`.
 
-Every action is one `ActionSpec` row (PRODUCT.md -> Data shapes). The pane's route, the agent's
-tool and (later) the Desktop confirm dialog all read the same row, so the request an action sends,
-the right it needs and the text that names its target are defined once.
+Every action is one `ActionSpec` row. The pane's route, the agent's tool and the Desktop confirm
+dialog all read the same row, so the request an action sends, the right it needs and the text
+that names its target are defined once.
 
 The order is fixed and every step can refuse before anything is sent to the target:
 
     plan()     1. the spec exists and the parameters are allowed (unknown ones are refused, so
                   nobody can add `docker_cleanup=true` to a stop)
                2. the API token: the token stored for actions, or the only token. Never the
-                  read-only token, even when it holds `deploy` (PRODUCT.md -> Which token does what)
-               3. that token holds `deploy` (the M1 made-up-UUID probe, cached for a minute)
+                  read-only token, even when it holds `deploy`
+               3. that token holds `deploy` (the token check's made-up-UUID probe, cached a minute)
                4. that token can see the target: the resource is in its own lists, or the
                   deployment answers its GET. A resource outside its view is refused here
                5. the request is built from the row; fixed parameters are applied last
@@ -40,12 +40,12 @@ from typing import Any, Mapping, Optional
 
 try:
     from .capabilities import (ABILITY_PROBES, ACTION_SETTING, READ_SETTING, Ability, Connection, Role,
-                               TokenSlot)
+                               TokenSlot, probe_right)
     from .coolify_client import CoolifyClient, CoolifyError, ErrorKind, Transport, fingerprint, urllib_transport
     from .snapshot import KINDS, _environment_map, _resources
 except ImportError:  # loaded as a top-level module (tests, scripts)
     from capabilities import (ABILITY_PROBES, ACTION_SETTING, READ_SETTING, Ability,  # type: ignore
-                              Connection, Role, TokenSlot)
+                              Connection, Role, TokenSlot, probe_right)
     from coolify_client import (CoolifyClient, CoolifyError, ErrorKind, Transport,  # type: ignore
                                 fingerprint, urllib_transport)
     from snapshot import KINDS, _environment_map, _resources  # type: ignore
@@ -258,20 +258,15 @@ ABILITY_CACHE = AbilityCache()
 
 
 def holds_deploy(client: CoolifyClient, cache: AbilityCache = ABILITY_CACHE) -> bool:
-    """The M1 probe for `deploy` alone: a POST against a made-up UUID; 404 = held, 403 = missing."""
+    """The token check's probe for `deploy` alone: a POST against a made-up UUID; 404 = held, 403 = missing."""
     key = f"{client.base_url}|{fingerprint(client._token)}"
     known = cache.get(key)
     if known is not None:
         return known
     try:
-        client.request(_DEPLOY_PROBE.method, _DEPLOY_PROBE.path, params=_DEPLOY_PROBE.params, json_body={})
-        held = True
+        held = probe_right(client, _DEPLOY_PROBE)
     except CoolifyError as error:
-        if error.kind in (ErrorKind.NOT_FOUND, ErrorKind.BAD_REQUEST):
-            held = True
-        elif error.kind is ErrorKind.FORBIDDEN:
-            held = False
-        elif error.kind is ErrorKind.UNAUTHORIZED:
+        if error.kind is ErrorKind.UNAUTHORIZED:
             raise ActionRefused("unauthorized", "Coolify rejected the API token (401). Store a valid "
                                                 f"token as {ACTION_SETTING}.") from None
         elif error.kind is ErrorKind.UNREACHABLE:
@@ -547,9 +542,9 @@ def execute(action: ActionPlan, *, transport: Transport = urllib_transport,
     try:
         payload = client.request(request.method, request.path, params=dict(request.params) or None,
                                  json_body=dict(request.json_body) if request.json_body is not None else {})
-    except CoolifyError as error:
+    except CoolifyError as error:  # `sent`: whether the request may have reached Coolify and run
         return {"ok": False, "error": error.kind.value, "message": error.message, "status": error.status,
-                "sent": True, **action.to_dict()}
+                "sent": error.sent, **action.to_dict()}
     out = {"ok": True, "sent": True, **action.to_dict(), "response": payload,
            "deployment_uuid": _deployment_uuid(payload), "ms": round((time.monotonic() - started) * 1000)}
     if isinstance(payload, dict) and isinstance(payload.get("deployments"), list):

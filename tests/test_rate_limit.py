@@ -3,7 +3,7 @@
 Coolify 4.6.0 throttles `/api/*` at API_RATE_LIMIT requests per minute (200 by default) per Coolify
 user, so both cockpit tokens of one user share one budget. Before 0.0.10 a page load spent ~129 of
 it (two separate capabilities checks of ~49 requests each plus a 30-request snapshot), and a 429
-came back as `bad_request` (experiments/coolify-cockpit/m9-ratelimit). These tests pin the mapping
+came back as `bad_request` (measured against a live instance). These tests pin the mapping
 and the caches that keep one open page far below the limit.
 """
 

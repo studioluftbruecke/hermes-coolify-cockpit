@@ -1,4 +1,4 @@
-"""Behaviour of M7 and M8: the notebook COOLIFY.md, the cockpit's entries for observed changes, the
+"""Behaviour: the notebook COOLIFY.md, the cockpit's entries for observed changes, the
 update notice, the `@coolify:` context references and what `register()` hands to Hermes (skill,
 redaction patterns, reference provider). Synthetic fixtures only, no network."""
 
@@ -107,7 +107,7 @@ def setup(m, inst, data_dir, **kw):
 PAIR = {"tok-action": "scoped", "tok-read": "teamwide"}
 
 
-# --- M7: the notebook ------------------------------------------------------------------------------
+# --- the notebook ------------------------------------------------------------------------------
 
 def test_append_is_dated_signed_and_keeps_earlier_entries(m, tmp_path):
     book = m.notes.Notebook(tmp_path, clock(2026, 11, 8, 14, 3, 59))
@@ -196,7 +196,7 @@ def test_coolify_notes_tool_reads_and_appends(m, tmp_path):
     assert json.loads(m.pkg.make_notes_handler(None)({"action": "read"}))["error"] == "no_data_dir"
 
 
-# --- M7: observed changes, one entry each ------------------------------------------------------------
+# --- observed changes, one entry each ------------------------------------------------------------
 
 def obs(m, **kw):
     return m.notes.Observation(m.notes.instance_key(BASE), **kw)
@@ -334,7 +334,7 @@ def test_a_fresh_snapshot_notices_a_new_server(m, tmp_path):
     assert len(m.notes.Notebook(tmp_path).entries()) == 1
 
 
-# --- M8: @coolify: references ----------------------------------------------------------------------
+# --- @coolify: references ----------------------------------------------------------------------
 
 def expand(m, raw, tmp_path, inst=None, **kw):
     inst = inst or Instance(PAIR)
@@ -431,7 +431,7 @@ def test_autocomplete_uses_only_the_cached_snapshot(m, tmp_path):
     assert len(inst.requests) == calls
 
 
-# --- M8: what register() hands to Hermes ------------------------------------------------------------
+# --- what register() hands to Hermes ------------------------------------------------------------
 
 class HermesCtx:
     def __init__(self):
@@ -541,7 +541,7 @@ def test_no_provider_outside_hermes(m, monkeypatch):
     assert m.pkg.make_reference_provider("anything") is None
 
 
-# --- M7: the notebook routes for the cockpit's widget ------------------------------------------------
+# --- the notebook routes for the cockpit's widget ------------------------------------------------
 
 def test_notes_routes(m, tmp_path):
     status, body = m.pkg.api_notes_append({"text": "edge is the build server", "topic": "servers"}, data_dir=tmp_path)
@@ -581,7 +581,7 @@ def test_plugin_api_mounts_the_notes_routes(monkeypatch):
     assert {"/notes", "POST /notes"} <= set(api.router.routes)
 
 
-# --- M9: one release-feed read per FEED_TTL_S, whoever asks -----------------------------------------
+# --- one release-feed read per FEED_TTL_S, whoever asks -----------------------------------------
 
 def test_capabilities_checks_share_one_feed_read_per_six_hours(m, kit, tmp_path):
     fake = kit.FakeCoolify({"tok-action": "scoped_read_deploy", "tok-read": "teamwide_read"})

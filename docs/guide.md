@@ -33,8 +33,9 @@ Two optional tokens exist for the cases that need them:
 | Read-only token | Only when your API token is limited to some projects. A limited token cannot read servers and sees nothing outside its projects. A team-wide read token shows servers and every app, and the cockpit never acts with it | `read`, team-wide | `COOLIFYBRUECKE_READ_TOKEN` |
 | Git host token | Only for "branch ahead" on private repositories when Forgebrücke is not installed (see [Branch ahead](#branch-ahead)) | Read-only repository access on your git host | `COOLIFYBRUECKE_GIT_TOKEN`, with the setting `git_host` |
 
-The env names are the same as in 0.0.x, so an existing setup keeps working without re-entering a
-token.
+Coming from Coolify Cockpit 0.1.0, whose settings had other names? Enter the URL and tokens again
+under these names; [Upgrading from Coolify Cockpit 0.1.0](../README.md#upgrading-from-coolify-cockpit-010)
+in the README lists what moves on its own.
 
 Leave `read:sensitive` off the Coolify tokens. It lets a token read deployment logs and secret
 values such as environment variables, and anything the tools read can reach your model provider.
@@ -55,7 +56,8 @@ After the token is saved, one result line takes the place of the explanation, fo
 read, deploy · no servers" and a button **Add a read-only token**. A token that holds `write` or
 `delete` gets an amber chip "can change and delete".
 
-**Check again** sits under that line, on the page's Connection widget and on the settings page. One
+**Check again** sits under that line on the settings page, and in the setup steps while the cockpit
+is not set up yet. One
 click reads the settings again (a token you just saved included), runs the connection and rights
 check anew, and shows the result and when it ran. Use it after you change something outside Hermes,
 such as a token's rights in Coolify or an allow-list in front of it; otherwise the page reuses a
@@ -68,7 +70,7 @@ The settings form, in its order:
 | --- | --- |
 | Coolify URL (`COOLIFYBRUECKE_URL`) | The address you open Coolify at |
 | API token (`COOLIFYBRUECKE_TOKEN`) | A Coolify API token (Coolify: Keys & Tokens → API tokens). Recommended: `read` and `deploy`, all projects |
-| Protected environments (`protected_environments`) | Comma-separated environment names. Default `production` |
+| Protected environments (`protected_environments`) | Comma-separated environment names. Default `production`, also when the field is left empty |
 | Agent may act on protected environments (`agent_on_protected`) | Off by default. See [Protected environments](#protected-environments) |
 | Let the agent run actions (`agent_actions`) | On by default. Every agent action still asks for your approval; off means only your own clicks act |
 | Disk warning at (%) (`disk_warn_percent`) | Default 85. A server at or over this disk use needs attention |
@@ -267,7 +269,9 @@ single-query `hermes chat -q` or `-z`), the call is refused without asking and w
 to Coolify; the read tools keep working there. If you run plugins in a separate plugin host
 (`plugins.isolation: host`), the plugin cannot see whether a CLI turn is a one-shot `hermes -z`
 run, so it also refuses agent actions from the CLI there; Desktop, the TUI and chat platforms
-still ask. If you switch Hermes' approvals off or turn on
+still ask. On a Hermes release that no longer tells plugins whether a turn is a one-shot run, the
+plugin refuses every agent action and says so, until an update of the plugin reads the new signal;
+the cockpit's own buttons keep working. If you switch Hermes' approvals off or turn on
 `/yolo`, Hermes approves without asking, as it does for every other gated tool.
 
 Where the turn runs decides who can approve:
@@ -342,7 +346,7 @@ started that fails opens its diagnosis without a click, with **Ask Hermes to fix
 button opens a confirmation naming the action, the resource, its environment and server, the token
 and the request; on a protected environment it adds the line "This is <environment>." Only then is it sent, and the
 page follows the deployment until it ends. **Redeploy N apps with changed env** asks once for all of
-them and lists each. **Edit layout** lets you add, remove, reorder and resize widgets, change their
+them and lists each. **Edit** lets you add, remove, reorder and resize widgets, change their
 settings and apply a preset; a save that collides with a newer version (the agent's) is refused,
 and the page reloads the newer layout and tells you.
 
@@ -424,10 +428,13 @@ job back (on or off, schedule, delivery, last check, open items) from `hermes cr
 **A changed token is used at once, without a restart.** Chats read the token on every call. For a
 profile whose routes run in its plugin host process (`HERMES_PLUGIN_HOST_PROCESS=1`, every
 profile but the one the backend launched as), the host's environment is the profile's `.env` as it
-was when the host started, so each route request reads the plugin's own secrets
-(`COOLIFYBRUECKE_*`) through Hermes' secret-scope builder (`agent.secret_scope.
-build_profile_secret_scope`), the same one a gateway turn uses; a token removed from the settings
-is gone at once there too. In the backend's own process the request already runs in a fresh
+was when the host started, so the routes read the plugin's own secrets (`COOLIFYBRUECKE_*`)
+through Hermes' secret-scope builder (`agent.secret_scope.build_profile_secret_scope`), the same
+one a gateway turn uses: at most every 2 seconds (one build serves a page load's requests), and on
+"Check again". The routes never open or inspect `.env` themselves. Only the plugin's own keys are
+kept between requests. A token saved or removed in the settings is used or gone there within 2
+seconds. Hermes 0.23 has no public
+call that refreshes a plugin host's secrets; this is the stand-in until it has one. In the backend's own process the request already runs in a fresh
 profile scope and the routes use `get_secret`. `GET /setup` says which settings are filled in,
 without a Coolify request and without a token value. Route errors that a wrong token could explain say so in a `hint` field.
 

@@ -1,8 +1,5 @@
-"""0.2.4: "Check again" on the setup line re-reads the tokens and runs the rights check anew.
-
-Konstantin (2026-11-12): "Forgebrücke has a button after setting the environment variables, if
-they're not getting picked up, that with a click of a button they get picked up. [...] And we also
-need this in Coolifybrücke."
+"""The "Check again" button on the setup line re-reads the tokens and runs the rights check anew, the way
+Forgebrücke's button picks up environment variables saved after the fact.
 
 The page's capabilities route shares one check for 2 minutes (`CAPABILITIES_TTL_S`). A token saved
 in the settings form changes the cache key, so it is used on the next ask anyway. A fix outside

@@ -12,6 +12,7 @@ tool and (later) the Desktop widgets read the same rows.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
@@ -19,11 +20,12 @@ from typing import Any, Callable, Mapping, Optional
 
 try:
     from .coolify_client import (CoolifyClient, CoolifyError, ErrorKind, LimitWatch, Transport,
-                                 fetch_public_json, fingerprint, normalize_base_url, urllib_transport)
+                                 fetch_public_json, fingerprint, header_safe, normalize_base_url,
+                                 urllib_transport)
 except ImportError:  # loaded as a top-level module (tests, scripts)
     from coolify_client import (CoolifyClient, CoolifyError, ErrorKind, LimitWatch,  # type: ignore
-                                Transport, fetch_public_json, fingerprint, normalize_base_url,
-                                urllib_transport)
+                                Transport, fetch_public_json, fingerprint, header_safe,
+                                normalize_base_url, urllib_transport)
 
 BOGUS_UUID = "hermes-permission-probe-does-not-exist"
 RELEASES_URL = "https://cdn.coollabs.io/coolify/versions.json"
@@ -72,7 +74,7 @@ class AbilityProbe:
     params: Optional[Mapping[str, str]] = None
 
 
-# Every path names BOGUS_UUID; probe P1/P9/P13 measured these answers.
+# Every path names BOGUS_UUID; these answers were measured against Coolify 4.6.
 ABILITY_PROBES: tuple[AbilityProbe, ...] = (
     AbilityProbe(Ability.READ, "GET", f"/applications/{BOGUS_UUID}"),
     AbilityProbe(Ability.READ_SENSITIVE, "GET", f"/applications/{BOGUS_UUID}/logs"),
@@ -117,6 +119,11 @@ def connection_from_settings(url: Optional[str], action_token: Optional[str],
         raise ConfigError(f"{URL_SETTING}: {error}") from None
     action = (action_token or "").strip()
     read = (read_token or "").strip()
+    for setting, value in ((ACTION_SETTING, action), (READ_SETTING, read)):
+        if value and not header_safe(value):
+            found = "a space or line break" if re.search(r"\s", value) else "a character no token has"
+            raise ConfigError(f"{setting} contains {found}, so it cannot be sent. Store the token again "
+                              "as one line in the plugin settings.")
     if not action and not read:
         raise ConfigError(f"No Coolify token set. Store an API token as {ACTION_SETTING} in the "
                           f"plugin settings; optionally a team-wide read-only token as {READ_SETTING}.")
@@ -216,7 +223,6 @@ class Needs:
 class FeatureRule:
     id: str
     label: str
-    product: str  # the PRODUCT.md feature it belongs to
     needs: Needs
     reason_if_missing: str
     unlock_hint: str
@@ -260,45 +266,45 @@ OVERVIEW_HINT = (f"add a team-wide read-only token ({READ_SETTING}), or use a "
 
 FEATURE_RULES: tuple[FeatureRule, ...] = (
     FeatureRule(
-        "connection", "Connection, version and token rights", "F1/F2", Needs(),
+        "connection", "Connection, version and token rights", Needs(),
         "No token was accepted by the instance",
         f"store a valid API token as {ACTION_SETTING} (Coolify: Keys & Tokens → API tokens)"),
     FeatureRule(
-        "resources", "Applications, services and databases with status", "F4",
+        "resources", "Applications, services and databases with status",
         Needs(abilities=(Ability.READ,)),
         "No token holds `read`", "give the token the `read` right"),
     FeatureRule(
-        "team_view", "Every project of the team", "F4",
+        "team_view", "Every project of the team",
         Needs(abilities=(Ability.READ,), unscoped=True),
         "No token holds `read`", "give the token the `read` right",
         "Only the {visible_projects} project(s) inside the token's scope are visible", OVERVIEW_HINT),
     FeatureRule(
-        "deployments", "Deployment queue and history", "F5",
+        "deployments", "Deployment queue and history",
         Needs(abilities=(Ability.READ,)),
         "No token holds `read`", "give the token the `read` right"),
     FeatureRule(
-        "servers", "Server list and health", "F3",
+        "servers", "Server list and health",
         Needs(abilities=(Ability.READ,), unscoped=True),
         "No token holds `read`", "give the token the `read` right",
         "No server data (scoped tokens cannot read servers)", OVERVIEW_HINT),
     FeatureRule(
-        "server_stats", "Server stats: CPU, RAM, disk, load, network", "F3",
+        "server_stats", "Server stats: CPU, RAM, disk, load, network",
         Needs(abilities=(Ability.READ,), unscoped=True, mcp=True, metrics=True),
         "No token holds `read`", "give the token the `read` right",
         "No server stats (scoped tokens cannot read servers)", OVERVIEW_HINT),
     FeatureRule(
-        "actions", "Deploy, restart, start, stop, cancel, rollback", "F6",
+        "actions", "Deploy, restart, start, stop, cancel, rollback",
         Needs(abilities=(Ability.DEPLOY,), lane=Lane.ACTION),
         "No actions (the {action_token} lacks `deploy`)",
         f"give the {{action_token}} the `deploy` right, or store a token that has it as {ACTION_SETTING}"),
     FeatureRule(
-        "live_logs", "Live deployment logs (diagnosis without pasting)", "F8",
+        "live_logs", "Live deployment logs (diagnosis without pasting)",
         Needs(abilities=(Ability.READ_SENSITIVE,)),
         "No live logs (no token holds `read:sensitive`)",
         "paste failed logs into the chat for a diagnosis, or add `read:sensitive` to the "
         "{action_token}'s scope"),
     FeatureRule(
-        "update_notice", "Update notice for new Coolify releases", "F9",
+        "update_notice", "Update notice for new Coolify releases",
         Needs(update_check=True),
         "No token was accepted by the instance",
         f"store a valid API token as {ACTION_SETTING}"),
@@ -307,29 +313,45 @@ FEATURE_RULES: tuple[FeatureRule, ...] = (
 
 # --- probing -----------------------------------------------------------------------------------
 
+NOT_COOLIFY_NOTE = ("the address answered success for an application that does not exist, where Coolify answers "
+                    "404, so it is not Coolify's API answering (a proxy or another service?); set the Coolify URL "
+                    "to the address its API answers at")
+
+
+def probe_right(client: CoolifyClient, probe: AbilityProbe) -> bool:
+    """One right probe: held = 404 (or another 4xx), missing = 403 naming the right.
+
+    Any other answer raises its CoolifyError, since it says nothing about the right. A success for
+    the made-up UUID is no answer Coolify gives (an empty body, 204 and `{}` included), so it
+    raises as unreachable instead of counting as held.
+    """
+    assert BOGUS_UUID in probe.path or BOGUS_UUID in (probe.params or {}).values()
+    try:
+        client.request(probe.method, probe.path, params=probe.params,
+                       json_body=None if probe.method in ("GET", "DELETE") else {})
+    except CoolifyError as error:
+        if error.kind in (ErrorKind.NOT_FOUND, ErrorKind.BAD_REQUEST):
+            return True
+        if error.kind is ErrorKind.FORBIDDEN:
+            return False
+        raise
+    raise CoolifyError(ErrorKind.UNREACHABLE, NOT_COOLIFY_NOTE, method=probe.method, path=probe.path, sent=False)
+
+
 def probe_abilities(client: CoolifyClient) -> tuple[dict[Ability, Optional[bool]], Optional[CoolifyError]]:
-    """Held right = 404 (or any non-auth answer), missing right = 403 naming it, unknown = None.
+    """Every right probe in turn (`probe_right`); a right with no clear answer is None.
 
     Stops at the first 401, unreachable or 429 answer and returns it, since no later probe can
-    succeed (and each one more would spend from the rate limit that just ran out). A 429 says
-    nothing about the right, so it never counts as held.
+    succeed (and each one more would spend from the rate limit that just ran out).
     """
     found: dict[Ability, Optional[bool]] = {}
     for probe in ABILITY_PROBES:
-        assert BOGUS_UUID in probe.path or BOGUS_UUID in (probe.params or {}).values()
         try:
-            client.request(probe.method, probe.path, params=probe.params,
-                           json_body=None if probe.method in ("GET", "DELETE") else {})
-            found[probe.ability] = True  # 2xx for a made-up UUID: the right check passed
+            found[probe.ability] = probe_right(client, probe)
         except CoolifyError as error:
-            if error.kind in (ErrorKind.NOT_FOUND, ErrorKind.BAD_REQUEST):
-                found[probe.ability] = True
-            elif error.kind is ErrorKind.FORBIDDEN:
-                found[probe.ability] = False
-            elif error.kind in (ErrorKind.UNAUTHORIZED, ErrorKind.UNREACHABLE, ErrorKind.RATE_LIMITED):
+            if error.kind in (ErrorKind.UNAUTHORIZED, ErrorKind.UNREACHABLE, ErrorKind.RATE_LIMITED):
                 return found, error
-            else:
-                found[probe.ability] = None
+            found[probe.ability] = None
     return found, None
 
 
@@ -564,7 +586,8 @@ def setup_warnings(tokens: list[TokenInfo], facts: InstanceFacts, notes: tuple[s
             continue
         held = {a for a, v in token.abilities.items() if v}
         if token.role is not Role.OVERVIEW and Ability.DEPLOY in held and token.scoped is False:
-            # A1 recommends exactly this token; the warning says what guards it instead (A8).
+            # The setup guide recommends exactly this token; the warning says what guards it instead
+            # (protected environments).
             warnings.append(f"The {token.role.word} can deploy, restart and stop every resource of "
                             "the team, production included. The agent stays off the protected "
                             "environments unless you allow it in the settings.")
@@ -706,11 +729,10 @@ def render_for_model(caps: Capabilities) -> dict[str, Any]:
     return out
 
 
-# --- the update notice (F9), shared by coolify_capabilities and coolify_overview -----------------
+# --- the update notice, shared by coolify_capabilities and coolify_overview -----------------
 #
 # One line for the model: the running version and, when Coolify publishes a newer one, that an update
-# exists with the instance link (the upgrade itself stays a click in Coolify, PRODUCT.md -> Not in
-# v0.1). The overview keeps the last answer in `version-check.json` in the plugin data dir: the
+# exists with the instance link (the upgrade itself stays a click in Coolify; the plugin never upgrades). The overview keeps the last answer in `version-check.json` in the plugin data dir: the
 # instance's version at most every VERSION_TTL_S, Coolify's release feed at most every FEED_TTL_S.
 
 VERSION_TTL_S = 600.0
@@ -830,9 +852,9 @@ def cached_version_status(client: CoolifyClient, *, check_updates: bool, path: O
     return {k: data.get(k) for k in ("coolify_version", "latest_version", "update_available", "update_check")}
 
 
-# --- 0.1.0 M3: the setup's result line ------------------------------------------------------------
+# --- the setup's result line ------------------------------------------------------------
 #
-# After a token is saved, one line replaces the setup explanation (PLAN-v0.1 -> Tokens and setup):
+# After a token is saved, one line replaces the setup explanation (the result of the token check):
 #   "Team-wide · read, deploy · 28 apps · 2 servers"
 #   "Limited to 5 projects · read, deploy · no servers"   + the button "Add a read-only token"
 # A token holding write or delete adds one amber chip "can change and delete"; the cockpit never

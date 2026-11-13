@@ -23,6 +23,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+try:
+    from .redact import COMMIT_NOTE, commit_subject
+except ImportError:  # loaded as a top-level module (tests, scripts)
+    from redact import COMMIT_NOTE, commit_subject  # type: ignore
+
 MAX_REFERENCE_CHARS = 4000
 OVERVIEW_ALIASES = frozenset({"", "overview", "snapshot", "all", "*", "state"})
 HISTORY_IN_REFERENCE = 5
@@ -92,9 +97,9 @@ def render_resource(resource: dict, snapshot: dict, history: Optional[list[dict]
         if a.get("resource_uuid") == resource["uuid"] and a.get("signal") != "failing":
             lines.append(f"needs attention: {a.get('title')}")
     if history:
-        lines.append(f"last {len(history)} deployments, newest first (times UTC):")
+        lines.append(f"last {len(history)} deployments, newest first (times UTC; {COMMIT_NOTE}):")
         for d in history:
-            message = (d.get("commit_message") or "").splitlines()[0][:70] if d.get("commit_message") else ""
+            message = commit_subject(d.get("commit_message"), 70)
             lines.append(f"- {_when(d.get('created_at'))} {d.get('status')} commit {(d.get('commit') or '?')[:7]}"
                          + (f' "{message}"' if message else "") + f" (deployment {d.get('uuid')})")
     elif history_note:

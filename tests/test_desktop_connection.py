@@ -1,18 +1,17 @@
-"""0.2.4 fix round (PR #150 review): the Connection card's states and "Check again", run from the
-real desktop/plugin.js in node.
+"""The Connection card's states and "Check again", run from the real desktop/plugin.js in node.
 
 The three imports are swapped for stubs as in test_desktop_sidebar.py. `useQuery` answers from a
 table per query key, so each test sets one state of `/setup` and `/capabilities`; the component
 tree is expanded by calling each function component with those stubs.
 
-- R150-1: a click while a plain `/capabilities` fetch is in flight still sends
+- A click while a plain `/capabilities` fetch is in flight still sends
   `/capabilities?refresh=true`. The query client here keeps React Query 5's two rules that decide
   it: `fetchQuery` on a key with a fetch in flight returns that fetch's promise, and
   `cancelQueries` drops the fetch in flight. Set QUERY_CORE to the path of
   `@tanstack/query-core` to run the same case against the real library.
-- R150-2: the settings card while the Hermes half is off, while `/setup` loads, and when it failed
+- The settings card while the Hermes half is off, while `/setup` loads, and when it failed
   with a non-404 shows that state, not the empty card ("Coolify ?").
-- R150-3: a stored but invalid URL names the URL error.
+- A stored but invalid URL names the URL error.
 """
 
 from __future__ import annotations
@@ -119,7 +118,7 @@ const err = (status, message) => Object.assign(new Error(message), { status, bod
 const step = (id, extra) => ({ id, set: false, ...extra })
 const out = {}
 
-// R150-2
+// The settings card's off, loading and failed setup states.
 let c = card({ isLoading: false, data: undefined, error: err(404, "plugin 'coolifybruecke' is not enabled in this profile") }, idle)
 out.off = { ok: c.text.includes('Turn on the plugin in this profile.') && c.text.includes('Switch on Coolifybrücke in Capabilities, Plugins.') && !c.text.includes('Coolify ?'), text: c.text }
 c = card({ isLoading: true, data: undefined, error: null }, idle)
@@ -127,7 +126,7 @@ out.setup_loading = { ok: find(c.tree, n => n.props && n.props['data-cc-setup-re
 c = card({ isLoading: false, data: undefined, error: err(500, 'Internal Server Error') }, idle)
 out.setup_failed = { ok: c.text.includes('Setup: Internal Server Error') && c.text.includes('Check again') && !c.text.includes('Coolify ?'), text: c.text }
 
-// R150-3, and the wording he approved stays
+// A stored but invalid URL is named, and each not-set-up line keeps its exact wording.
 const needed = steps => card({ isLoading: false, error: null, data: { ok: true, configured: false, steps } }, idle).text
 const line = t => t.split('|').find(s => s.startsWith('Not set up')) || t
 out.url_error = { ok: false, text: line(needed([step('url', { value: 'coolify.example', error: 'the Coolify URL must start with http:// or https:// and name a host' }), step('action_token', { set: true }), step('read_token')])) }
@@ -139,7 +138,7 @@ out.no_token.ok = out.no_token.text === 'Not set up: add a token in the plugin s
 out.nothing = { text: line(needed([step('url'), step('action_token'), step('read_token')])) }
 out.nothing.ok = out.nothing.text === 'Not set up: add the Coolify URL and a token in the plugin settings.'
 
-// R150-1: the page's plain fetch is in flight when the user clicks.
+// "Check again" while the page's plain fetch is in flight.
 const { client, library } = await makeClient()
 globalThis.__client = client
 c = card({ isLoading: false, error: null, data: { ok: true, configured: true, steps: [] } }, { isLoading: false, error: null, data: { setup: { line: 'x', tone: 'good' } } })

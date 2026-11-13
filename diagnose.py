@@ -301,7 +301,7 @@ class Diagnosis:
     log_format: str = "text"
 
     def to_dict(self) -> dict[str, Any]:
-        """The PRODUCT.md `Diagnosis` shape (plus display fields) for the Desktop half."""
+        """The `Diagnosis` shape (plus display fields) for the Desktop half."""
         return {
             "class": self.class_id, "title": self.title, "confidence": self.confidence,
             "evidence": [{"line": e.line, "text": e.text} for e in self.evidence],
@@ -567,11 +567,11 @@ def _paste_answer(error: str, reason: str, **extra: Any) -> dict[str, Any]:
 
 def fetch_deployment_log(connection: Any, deployment_uuid: str, *, transport: Any = None,
                          timeout: float = 15.0) -> tuple[Optional[Any], dict[str, Any]]:
-    """Read one deployment's `logs` with the token M1's routing picks for read:sensitive.
+    """Read one deployment's `logs` with the token the routing rule picks for read:sensitive.
 
     Returns (logs, meta) on success and (None, answer) when the log cannot be read; the answer
     tells the model to ask for a pasted log and why. Only GET requests are sent: the two
-    read-right probes against M1's made-up UUID, then GET /deployments/{uuid}.
+    read-right probes against the token check's made-up UUID, then GET /deployments/{uuid}.
     """
     from . import capabilities as caps
     from .coolify_client import CoolifyClient, CoolifyError, ErrorKind, fingerprint, urllib_transport
@@ -589,14 +589,9 @@ def fetch_deployment_log(connection: Any, deployment_uuid: str, *, transport: An
             if probe.ability not in wanted:
                 continue
             try:
-                client.request(probe.method, probe.path, params=probe.params)
-                info.abilities[probe.ability] = True
+                info.abilities[probe.ability] = caps.probe_right(client, probe)
             except CoolifyError as error:
-                if error.kind in (ErrorKind.NOT_FOUND, ErrorKind.BAD_REQUEST):
-                    info.abilities[probe.ability] = True
-                elif error.kind is ErrorKind.FORBIDDEN:
-                    info.abilities[probe.ability] = False
-                elif error.kind is ErrorKind.UNAUTHORIZED:
+                if error.kind is ErrorKind.UNAUTHORIZED:
                     info.status = caps.TokenStatus.UNAUTHORIZED
                     break
                 elif error.kind is ErrorKind.UNREACHABLE:

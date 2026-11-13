@@ -1,4 +1,4 @@
-"""Behaviour of M2: the Snapshot, its cache, the read tools and the dashboard routes, against a
+"""Behaviour: the Snapshot, its cache, the read tools and the dashboard routes, against a
 synthetic instance (`fixtures/snapshot.json`, Coolify 4.6.0 shapes). No network."""
 
 import copy
@@ -7,6 +7,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import time
 import types
 import urllib.error
 import urllib.parse
@@ -522,13 +523,15 @@ def test_routes_read_a_token_saved_after_the_plugin_host_started(monkeypatch):
     assert api._get_secret("COOLIFYBRUECKE_READ_TOKEN") is None  # removed from .env: gone at once
     assert api._get_secret("OTHER") == "x"  # other names keep Hermes' own lookup
     profile_now["COOLIFYBRUECKE_TOKEN"] = "rolled"
+    clock = time.monotonic() + 2.0  # one scope build serves 2 seconds of reads
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
     assert api._get_secret("COOLIFYBRUECKE_TOKEN") == "rolled"
 
     monkeypatch.delenv("HERMES_PLUGIN_HOST_PROCESS")  # in process: the request's own fresh scope
     assert api._get_secret("COOLIFYBRUECKE_READ_TOKEN") == "removed-since"
 
 
-# --- 0.1.0 M2: the Attention list on a served snapshot -------------------------------------------
+# --- the Attention list on a served snapshot -------------------------------------------
 
 def test_served_snapshot_carries_attention_env_changes_and_counts(m2, tmp_path):
     envs = "GET /api/v1/applications/app-shop-web/envs"
@@ -572,7 +575,7 @@ def test_server_metrics_route_reuses_the_snapshot_for_1h_and_reads_other_ranges_
     assert status == 400 and body["error"] == "bad_range"
 
 
-# --- 0.1.0 M5: the last good deploy of a failing app past the finished list ------------------
+# --- the last good deploy of a failing app past the finished list ------------------
 
 def test_a_failing_app_without_a_listed_success_reads_its_history_once_for_the_last_good(m2):
     finished = FIXTURE["teamwide"]["mcp"]["list_deployments:finished"]

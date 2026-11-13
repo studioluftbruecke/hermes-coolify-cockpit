@@ -1,5 +1,4 @@
 """The `behind_branch` signal's reads: is an application's branch ahead of what it runs?
-(PLAN-v0.1 -> A10, probe M0c.)
 
 Coolify does not know the branch head: every application stores `git_commit_sha: HEAD`. The
 deployed commit is known (the last finished deployment's `commit`). The head comes from the git
@@ -7,12 +6,12 @@ host, through the first source that can answer, in this order:
 
     1. forgebruecke  Forgebrücke's `forgejo_get kind=branch`, when it is enabled in the same
                      profile and the repository sits on its Forgejo host. Only a process that
-                     holds the plugin `ctx` can call it (M0c: the tick command and the agent's
+                     holds the plugin `ctx` can call it (the tick command and the agent's
                      tools; a page route cannot), so routes leave these apps to them.
     2. git_token     The optional "Git host token" against its own host's API (Forgejo/Gitea or
                      GitHub). The only source that also counts the commits between the two.
     3. public        git's smart HTTP (`info/refs?service=git-upload-pack`) without a credential:
-                     answers a public repository, refuses a private one (M0c: 200 and 401).
+                     answers a public repository, refuses a private one (200 and 401).
 
 A token is only ever sent to the host it belongs to: Forgebrücke uses its own, and the git host
 token goes to `git_host` (or github.com for a GitHub token when that setting is empty). The answers
@@ -35,6 +34,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+
+try:
+    from .coolify_client import HEADER_UNSAFE_NOTE, redirect_target
+except ImportError:  # loaded as a top-level module (tests, scripts)
+    from coolify_client import HEADER_UNSAFE_NOTE, redirect_target  # type: ignore
 
 BRANCH_FILE = "branch-heads.json"
 BRANCH_TTL_S = 600.0          # a head is read again after 10 minutes
@@ -136,12 +140,46 @@ class ReadError(Exception):
         self.kind = kind   # closed (401/403/404: private or gone) | failed (anything else)
 
 
+PUBLIC_REDIRECTS = 3  # hops a read without a credential follows on its own host (a renamed repository)
+
+
+def _location(response: Any) -> str:
+    for name, value in (getattr(response, "headers", None) or {}).items():
+        if name.lower() == "location":
+            return str(value).strip()
+    return ""
+
+
+def _same_host(url: str, target: str) -> bool:
+    """`target` on the host of `url`, with the same scheme and port or moved from http to https."""
+    a, b = urllib.parse.urlsplit(url), urllib.parse.urlsplit(target)
+    if not b.hostname or b.hostname != a.hostname:
+        return False
+    return (a.scheme, a.port) == (b.scheme, b.port) or (a.scheme, b.scheme) == ("http", "https")
+
+
 def _http(transport: Transport, url: str, headers: Mapping[str, str]) -> tuple[int, bytes]:
-    try:
-        response = transport("GET", url, {"User-Agent": "hermes-coolifybruecke", **headers}, None, TIMEOUT_S)
-    except OSError as error:
-        raise ReadError("failed", f"no answer: {error}") from error
-    return int(response.status), bytes(response.body or b"")
+    """A GET. The transport never follows a redirect, so a token stays with its host; a read
+    without a credential follows up to PUBLIC_REDIRECTS redirects on the same host."""
+    public = not any(name.lower() == "authorization" for name in headers)
+    hops = 0
+    while True:
+        try:
+            response = transport("GET", url, {"User-Agent": "hermes-coolifybruecke", **headers}, None, TIMEOUT_S)
+        except OSError as error:
+            raise ReadError("failed", f"no answer: {error}") from error
+        except ValueError:  # http.client's text for a bad header quotes the header, token included
+            raise ReadError("failed", HEADER_UNSAFE_NOTE) from None
+        status = int(response.status)
+        if not 300 <= status < 400:
+            return status, bytes(response.body or b"")
+        location = _location(response)
+        target = urllib.parse.urljoin(url, location)
+        if not (public and location and hops < PUBLIC_REDIRECTS and _same_host(url, target)):
+            shown = redirect_target(getattr(response, "headers", None))
+            raise ReadError("failed", f"the git host answered with a redirect to {shown} "
+                                      f"(HTTP {status}); it was not followed")
+        url, hops = target, hops + 1
 
 
 def _closed_or_failed(status: int) -> ReadError:

@@ -1,4 +1,4 @@
-"""0.1.0 M2: the failing rule, the window edge, the Signal registry and the env check (fleet.py,
+"""the failing rule, the window edge, the Signal registry and the env check (fleet.py,
 envcheck.py). Rows are recorded shapes (MCP list_deployments, REST history, env rows) with
 synthetic values."""
 
@@ -41,7 +41,7 @@ def complete(m):
     return m.fleet.ListWindow(True)
 
 
-# --- the failing rule (A3) --------------------------------------------------------------------
+# --- the failing rule --------------------------------------------------------------------
 
 def test_newest_settled_failed_and_nothing_running_is_failing(m):
     rows = [row("d1", "a", "finished", "2026-11-01T10:00:00Z"), row("d2", "a", "failed", "2026-11-02T10:00:00Z"),
@@ -231,7 +231,7 @@ def test_env_refresh_skips_deploying_apps_and_caps_reads(m):
     assert len(transport.paths) == m.env.ENV_READS
 
 
-# --- 0.1.0 M4: server ranges and the disk estimate (servers.py) --------------------------------
+# --- server ranges and the disk estimate (servers.py) --------------------------------
 
 def _srv():
     return importlib.import_module("coolifybruecke_fleet_under_test.servers")

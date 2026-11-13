@@ -258,7 +258,7 @@ def test_evidence_lines_are_marked_inside_the_block(plugin):
 # --- fetching by deployment UUID ---------------------------------------------------------------
 
 class FakeDeployments:
-    """Answers M1's two read probes per token and GET /deployments/{uuid}; records requests."""
+    """Answers the token check's two read probes per token and GET /deployments/{uuid}; records requests."""
 
     def __init__(self, kit, rights, deployments):
         self.kit, self.rights, self.deployments, self.requests = kit, rights, deployments, []
@@ -354,7 +354,7 @@ def test_handler_returns_json_text(plugin):
     assert out["diagnosis"]["class"] == "traefik_conflict"
 
 
-# --- POST /diagnose: the Desktop diagnosis widget (M3) ------------------------------------------
+# --- POST /diagnose: the Desktop diagnosis widget ------------------------------------------
 
 def test_route_classifies_a_pasted_log_into_the_widget_card(plugin):
     status, body = plugin.api_diagnose(lambda k, d=None: d, lambda k: None,

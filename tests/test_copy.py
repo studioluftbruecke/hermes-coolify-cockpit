@@ -1,6 +1,6 @@
-"""Copy rules (PLAN-v0.1 -> Copy rules) that a static read of the shipped files can hold.
+"""Copy rules that a static read of the shipped files can hold.
 
-The rendered-page length test lives in the off-device harness (experiments); these checks keep the
+The rendered-page length test lives in an off-device render harness outside this repository; these checks keep the
 manifest, the Desktop half's own description and the settings entry honest on every commit.
 """
 
@@ -48,9 +48,9 @@ def test_settings_entry_has_the_sidebar_name_and_icon():
     assert nav.group(1) == "Coolifybrücke"
 
 
-# --- 0.1.0 M8: no sentence over 120 characters in the shipped copy ------------------------------
+# --- no sentence over 120 characters in the shipped copy ------------------------------
 #
-# The off-device render checks the rendered default page (experiments/.../harness, run.cjs). These
+# The off-device render harness checks the rendered default page. These
 # two checks hold the same limit on every commit over the strings that copy is made of: the Desktop
 # half's string literals (class names, log lines and the chat drafts `*_PROMPT` excluded) and the
 # registries the page shows (attention signals, feature rules).

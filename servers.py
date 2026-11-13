@@ -1,4 +1,4 @@
-"""Server metrics per range and the disk estimate (0.1.0 M4, A15).
+"""Server metrics per range and the disk estimate.
 
 The snapshot keeps its 1 h series (one MCP call per server, reused for a minute). The cards' other
 ranges come from `GET /servers/metrics?range=6h|24h|7d`, read once per server and range and kept

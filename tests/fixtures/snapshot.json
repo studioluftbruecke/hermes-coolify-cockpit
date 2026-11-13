@@ -1,5 +1,5 @@
 {
- "_source": "Shapes from Coolify 4.6.0 (experiments/coolify-cockpit/m2/explore*.py); every value synthetic. 0.1.0: list_deployments:finished rows and git sources added (synthetic).",
+ "_source": "Shapes from Coolify 4.6.0 (recorded from a live instance); every value synthetic. 0.1.0: list_deployments:finished rows and git sources added (synthetic).",
  "teamwide": {
   "rest": {
    "GET /api/v1/servers": [

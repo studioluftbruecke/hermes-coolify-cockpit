@@ -1,4 +1,4 @@
-"""0.1.0 M7: the behind_branch reads (branches.py) and the signal they feed (fleet.py).
+"""the behind_branch reads (branches.py) and the signal they feed (fleet.py).
 
 Git host answers are recorded shapes (smart-HTTP ref advertisement, Forgejo/GitHub branch and
 compare JSON, Forgebrücke's forgejo_get) with synthetic values. No network.
@@ -230,7 +230,7 @@ def test_behind_branch_signal_words(m):
     assert [(a["resource_uuid"], a["title"], a["fix"]) for a in items] == [
         ("a1", "shop (production): main is 3 commits ahead", "deploy"),
         ("a2", "shop-st (staging): staging is ahead", "deploy")]  # a3: the head is behind what runs
-    assert [a["badge"] for a in items] == ["3 ahead", "ahead"]  # the app row's badge (A14: "N ahead")
+    assert [a["badge"] for a in items] == ["3 ahead", "ahead"]  # the app row's badge ("N ahead")
     assert m.fleet.summary(m.fleet.attention(view)) == [
         {"signal": "behind_branch", "label": "branch ahead", "severity": "warn", "count": 2}]
 

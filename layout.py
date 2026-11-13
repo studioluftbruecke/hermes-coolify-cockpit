@@ -1,6 +1,6 @@
 """The cockpit layout: `Layout`, `Widget`, the `WidgetType` registry, presets, validation, storage.
 
-PRODUCT.md -> Customization model: presets, then edit mode, then the agent, all on one layout.
+Customization: presets, then edit mode, then the agent, all on one layout.
 The Desktop page and the agent's `coolify_cockpit` tool edit the same file, `layout.json` in the
 plugin's data directory, so everything here is data the page renders, never code.
 
@@ -45,7 +45,7 @@ except ImportError:  # loaded as a top-level module (tests, scripts)
     from actions import SPECS as ACTION_SPECS_BY_KIND, ActionRefused, check_params  # type: ignore
     from capabilities import FEATURE_RULES  # type: ignore
 
-SCHEMA = 2  # 0.1.0 (A11): a file of another schema is discarded for the default
+SCHEMA = 2  # a file of another schema is discarded for the default
 SIZES = ("s", "m", "l")
 MAX_WIDGETS = 40
 MAX_TITLE = 80
@@ -460,7 +460,7 @@ class Preset:
 
 
 def _overview(_: dict) -> list[dict]:
-    # 0.1.0 (A5, A14 sketch A): what needs you, what happened last, every app, the servers.
+    # What needs you, what happened last, every app, the servers.
     return [{"id": "summary", "type": "summary", "size": "l", "props": {}},
             {"id": "deployments", "type": "deployments", "size": "l", "props": {"limit": 8}},
             {"id": "apps", "type": "resources", "size": "l", "props": {"row_actions": ["deploy", "restart"]}},
@@ -696,7 +696,7 @@ class LayoutStore:
                                "to start over"], code="unreadable")
         version = raw.get("version") if isinstance(raw.get("version"), int) else 0
         if raw.get("schema", 1) != SCHEMA:
-            # A11, T6: a layout of another schema (0.0.x wrote 1) is discarded without a warning. The
+            # A layout of another schema (0.0.x wrote 1) is discarded without a warning. The
             # default keeps the file's version, so the next compare-and-set save does not conflict.
             fresh = default_layout()
             return Layout(fresh.widgets, fresh.preset, version, raw.get("updated_at"), raw.get("updated_by"))

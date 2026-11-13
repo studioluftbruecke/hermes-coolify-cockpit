@@ -1,4 +1,4 @@
-"""Behaviour: every token setup from PRODUCT.md's 'Setups and what they unlock' table, plus an
+"""Behaviour: every token setup the README's setup table describes, plus an
 unreachable instance and a rejected token, gives the right available / not-available lists."""
 
 import json
@@ -165,10 +165,11 @@ def test_handler_returns_json_and_never_raises(kit):
 
     handler = kit.plugin.make_capabilities_handler(broken_setting, lambda name: None)
     out = json.loads(handler({}))
-    assert out == {"ok": False, "error": "internal", "message": "RuntimeError: config unreadable"}
+    assert out["ok"] is False and out["error"] == "internal"
+    assert "RuntimeError" in out["message"] and "config unreadable" not in out["message"]
 
 
-# --- 0.1.0 M3: the result line per token fixture ----------------------------------------------
+# --- the result line per token fixture ----------------------------------------------
 
 @pytest.mark.parametrize("action, read, line, extra", [
     ("teamwide_read_deploy", None, "Team-wide · read, deploy · 14 apps · 2 servers", {"tone": "good", "chip": None}),

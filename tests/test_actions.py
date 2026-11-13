@@ -1,4 +1,4 @@
-"""Behaviour of M4: the ActionSpec registry, the rights and view checks, `POST /actions`, and the
+"""Behaviour: the ActionSpec registry, the rights and view checks, `POST /actions`, and the
 agent lane (approval hook, handler, unattended refusal), against a synthetic instance. No network.
 
 The instance has one project `shop` with a `staging` environment (inside the scoped token's view)
@@ -103,7 +103,7 @@ class Instance:
                 if row and visible(APPS[row["application_uuid"]]):
                     return answer(200, row)
             return answer(404, {"message": "Not found."})
-        # Non-GET: the right is checked before the lookup (probe P1/P9).
+        # Non-GET: the right is checked before the lookup (measured against Coolify 4.6).
         if not deploy:
             return answer(403, DENIED)
         if path == "/deploy" and query.get("uuid") == BOGUS:
@@ -476,7 +476,7 @@ class _SurfaceCtx:
 @pytest.mark.parametrize("surface", ["cli", "oneshot", ""])
 def test_plugin_host_on_a_cli_surface_fails_closed(pkg, monkeypatch, surface):
     # In a separate plugin host the turn's single-query flag is not visible, and `hermes -z`
-    # auto-approves Hermes' gate, so an approve directive would act unattended (bug B1, M9).
+    # auto-approves Hermes' gate, so an approve directive would act unattended.
     monkeypatch.setenv(pkg.HOST_PROCESS_ENV, "1")
     run = pkg.run_context_from(_SurfaceCtx(surface))
     assert run.host_blind and "plugin host" in run.unattended_reason()
@@ -503,7 +503,7 @@ def test_an_action_never_resolves_part_of_a_name(pkg):
     assert "shop-web-staging" in body["message"], "it suggests the exact name instead"
 
 
-# --- 0.1.0 M3: protected environments (A8, T4) ------------------------------------------------------
+# --- protected environments ------------------------------------------------------
 
 def test_agent_is_refused_on_production_by_default_and_his_click_still_works(pkg):
     fake = Instance()
@@ -536,7 +536,7 @@ def test_staging_marked_protected_is_refused_and_unprotected_production_is_asked
     marked = settings(protected_environments="staging, Production")
     hermes = Hermes(pkg, attended(), fake, get_setting=marked)
     assert "staging is a protected environment" in hermes.call({"kind": "restart", "target": "app-stg"})["blocked"]
-    free = settings(protected_environments="")
+    free = settings(protected_environments="staging")  # production is no longer named
     hermes = Hermes(pkg, attended(), fake, action="tok-full", read=None, get_setting=free)
     assert hermes.call({"kind": "restart", "target": "shop-web"})["ok"]
     assert hermes.asked[0]["rule_key"] == "coolify_action:restart:app-prod"

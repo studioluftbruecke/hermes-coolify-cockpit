@@ -1,8 +1,47 @@
 # Changelog
 
+## 0.2.5
+
+A review round on security and correctness before the catalog's next review. Update both halves: the plugin where Hermes runs and the one Hermes Desktop loads.
+
+- Requests to Coolify and requests carrying the git host token never follow a redirect: a Coolify
+  address behind a login proxy now fails with an error naming where it pointed, and no token is
+  ever sent to another host. A token-less read of a public repository still follows a redirect on
+  the same host (a renamed repository).
+- A Coolify token holding a line break (a paste across a wrap) is refused by its setting's name and
+  never printed; unexpected errors report only their type.
+- A login page answering in place of Coolify is an error, never "all rights held" or an all-clear;
+  the alert job reports it as an outage instead of a recovery. The token check also reads no right
+  from an empty answer, 204 or `{}`: Coolify answers the check's made-up id with 404 or 403.
+- When Hermes cannot say whether a person is present, agent actions are refused with one sentence
+  instead of reaching Hermes' auto-approval.
+- Commit messages reach the agent as a masked, quoted first line marked as data.
+- Pasted logs, notes and commit messages also mask `APP_KEY`, `*_MASTER_KEY`, `JWT_KEY` and other
+  `*_KEY` values, and go through Hermes' own redactor as a second pass.
+- The settings page's alert status starts at most one `hermes cron list` per minute (new file
+  `cron-list.json`).
+- A deployment id that is not id-shaped is refused before any request.
+- Notes that are not text, and a layout version that is not a whole number, are refused as invalid.
+- An emptied "Protected environments" field keeps `production` protected.
+- The README says what "Always" on an approval prompt keeps allowing; the guide no longer says the
+  0.1.0 setting names keep working.
+- The page's routes in a plugin host read the profile's secrets through Hermes at most every 2
+  seconds (and on Check again) instead of for every secret on every request, and never open or
+  inspect `.env` themselves.
+- Enter on the Cancel button of an action's confirm no longer sends the action.
+- A send that fails, or fails halfway through "Redeploy N apps", no longer leaves the confirm armed: the page follows what was sent, says when a request may have run, and Check again plans only what was not sent.
+- A failed action says whether its request reached Coolify. A refused connection, a redirect, a login page or a proxy's refusal in front of Coolify answers `sent: false`, and the page says the request did not run; only an answer from Coolify, or a connection that broke after the request left, may have run.
+- Links from Coolify open only when they are http or https, and only through Desktop; the page never opens a window itself. Where Desktop cannot open a link, a notice names the address to open in a browser.
+- The status-bar chip no longer asks the backend every 4 seconds while the plugin is off or not set up in the profile: once a minute, and while the plugin is off from every 30 seconds up to every 5 minutes.
+- Followed actions, an open confirm, the diagnosis, chat chips and the banner belong to their profile; switching profiles no longer polls the other profile's apps.
+- The page and its settings page say so when the Desktop half and the Hermes half run different versions.
+- Cancelling a deployment refreshes its app's open deployment history at once.
+- "Redeploy 1 app" instead of "Redeploy 1 apps".
+- The layout routes answer 400 for a version that is not a whole number, and the notebook route refuses text that is not a string.
+
 ## 0.2.4
 
-A "Check again" button, and a cloud icon (Konstantin's feedback of 2026-11-12).
+A "Check again" button, and a cloud icon.
 
 - **Check again** under the setup line (the Connection widget, the settings page and the setup
   steps). One click reads the settings again, so a token saved in the settings form after the page

@@ -3,7 +3,8 @@
 Every failure leaves as one typed `CoolifyError` whose `kind` says what went wrong, so callers
 branch on a value, not on status codes or exception classes:
 
-    unreachable     no HTTP answer (DNS, refused, TLS, timeout), or a 403 that refused the request
+    unreachable     no HTTP answer (DNS, refused, TLS, timeout), a redirect (never followed: it
+                    would carry the token to the redirect's host), or a 403 that refused the request
                     before Coolify checked the token: a proxy or firewall in front of Coolify
                     (any 403 whose body is not JSON), Coolify's API switched off, or this machine
                     outside Coolify's allowed IPs for the API
@@ -15,6 +16,11 @@ branch on a value, not on status codes or exception classes:
     rate_limited    429: Coolify's API rate limit; `retry_after` carries Retry-After in seconds
     bad_request     any other 4xx (validation, method not allowed)
     server          5xx, or an answer that is not what the endpoint promises
+
+`sent` on the error says whether the request may have reached Coolify: False when it never left
+this machine (DNS, refused connection, TLS, a header that could not be built) or when something in
+front of Coolify answered instead (a redirect, a web page, a proxy's 403); True for every answer
+from Coolify and for a connection that broke or went silent after the request left.
 
 Coolify's API rate limit (4.6.0, app/Providers/RouteServiceProvider.php): API_RATE_LIMIT requests
 per minute, 200 by default, counted per Coolify user, so every token of that user spends from one
@@ -32,6 +38,7 @@ import hashlib
 import http.client
 import json
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -86,7 +93,7 @@ class ErrorKind(str, Enum):
 class CoolifyError(Exception):
     def __init__(self, kind: ErrorKind, message: str, *, status: Optional[int] = None,
                  ability: Optional[str] = None, method: str = "", path: str = "",
-                 retry_after: Optional[int] = None):
+                 retry_after: Optional[int] = None, sent: bool = True):
         super().__init__(message)
         self.kind = kind
         self.message = message
@@ -95,6 +102,7 @@ class CoolifyError(Exception):
         self.method = method
         self.path = path
         self.retry_after = retry_after
+        self.sent = sent
 
     def __str__(self) -> str:
         where = f" ({self.method} {self.path})" if self.path else ""
@@ -110,15 +118,29 @@ class HttpResponse:
 
 
 # (method, url, headers, body, timeout) -> HttpResponse for any HTTP status.
-# Raises OSError (urllib.error.URLError, timeouts, resets) when no HTTP answer arrives.
+# Raises OSError (urllib.error.URLError, timeouts, resets) when no HTTP answer arrives. urllib wraps
+# every failure before the request is fully written (DNS, connect, TLS) in URLError, and lets one
+# while waiting for the answer through as it is.
 Transport = Callable[[str, str, Mapping[str, str], Optional[bytes], float], HttpResponse]
+
+
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # urllib then raises HTTPError, so the 3xx and its Location reach the caller
+
+
+# urllib's default opener follows a redirect to any host with the Authorization header attached,
+# and resends a redirected POST as a GET without its body. A login proxy in front of Coolify
+# answers with exactly such a redirect, so this opener never follows one.
+_OPENER = urllib.request.build_opener(_RefuseRedirect)
 
 
 def urllib_transport(method: str, url: str, headers: Mapping[str, str], body: Optional[bytes],
                      timeout: float) -> HttpResponse:
+    """One request, never following a redirect: a 3xx comes back as the answer."""
     request = urllib.request.Request(url, data=body, method=method, headers=dict(headers))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             return HttpResponse(response.status, response.read(MAX_BODY_BYTES),
                                 response.headers.get("Content-Type", ""), dict(response.headers.items()))
     except urllib.error.HTTPError as error:
@@ -127,6 +149,25 @@ def urllib_transport(method: str, url: str, headers: Mapping[str, str], body: Op
         return HttpResponse(error.code, payload, content_type, dict(error.headers.items()) if error.headers else {})
     except http.client.HTTPException as error:  # a malformed answer counts as no answer
         raise OSError(str(error)) from error
+
+
+_HEADER_SAFE = re.compile(r"[\x21-\x7e]+")
+HEADER_UNSAFE_NOTE = ("the request could not be built: a token or setting holds a line break or another "
+                      "character an HTTP header cannot carry")
+
+
+def never_left(error: OSError) -> bool:
+    """True when the request cannot have left this machine: urllib's URLError (raised before the
+    request was fully written), a refused connection or a failed name lookup."""
+    reason = getattr(error, "reason", None)
+    return isinstance(error, (urllib.error.URLError, ConnectionRefusedError, socket.gaierror)) or \
+        isinstance(reason, (ConnectionRefusedError, socket.gaierror))
+
+
+def header_safe(token: str) -> bool:
+    """True when `token` is one run of printable ASCII, the only thing an HTTP header carries.
+    Anything else makes http.client raise a ValueError that quotes the whole header."""
+    return bool(_HEADER_SAFE.fullmatch(token or ""))
 
 
 def fingerprint(token: str) -> str:
@@ -143,6 +184,11 @@ def normalize_base_url(raw: str) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("the Coolify URL must start with http:// or https:// and name a host")
     return url
+
+
+_VERSION = re.compile(r"v?\d+\.\d+(?:\.\d+)?(?:[-+.][0-9A-Za-z.+-]*)?")
+WEB_PAGE_NOTE = ("the address answered with a web page, not Coolify's API (a login page or a proxy in front "
+                 "of Coolify?); set the Coolify URL to the address its API answers at")
 
 
 def _decode(body: bytes) -> Any:
@@ -178,15 +224,35 @@ def rate_limit_message(retry_after: Optional[int], upstream: str = "") -> str:
     return f"Coolify is limiting API requests{said}; {wait}. {RATE_LIMIT_NOTE}"
 
 
+def redirect_target(headers: Optional[Mapping[str, str]]) -> str:
+    """Where a 3xx pointed, as `scheme://host/path` without the query, or a placeholder."""
+    for name, value in (headers or {}).items():
+        if name.lower() == "location" and str(value).strip():
+            parts = urllib.parse.urlsplit(str(value).strip())
+            shown = f"{parts.scheme}://{parts.netloc}{parts.path}" if parts.netloc else parts.path
+            return shown[:120]
+    return "an address it did not name"
+
+
+def redirect_message(status: int, headers: Optional[Mapping[str, str]]) -> str:
+    return (f"the Coolify address answered with a redirect to {redirect_target(headers)} (HTTP {status}); "
+            "the request was not repeated there and the token was not sent there. Set the Coolify URL to "
+            "the address its API answers at, without a login page or proxy redirect in between")
+
+
 def error_for_status(status: int, payload: Any, method: str, path: str,
                      headers: Optional[Mapping[str, str]] = None) -> CoolifyError:
+    if 300 <= status < 400:
+        return CoolifyError(ErrorKind.UNREACHABLE, redirect_message(status, headers), status=status,
+                            method=method, path=path, sent=False)
     message = _message(payload) or f"HTTP {status}"
     if status == 401:
         return CoolifyError(ErrorKind.UNAUTHORIZED, message, status=status, method=method, path=path)
     if status == 403:
         gate = gate_refusal(payload)
-        if gate is not None:
-            return CoolifyError(ErrorKind.UNREACHABLE, gate, status=status, method=method, path=path)
+        if gate is not None:  # a body that is not JSON came from a proxy, not from Coolify
+            return CoolifyError(ErrorKind.UNREACHABLE, gate, status=status, method=method, path=path,
+                                sent=isinstance(payload, dict))
         if _SCOPE_REFUSAL in message.lower():
             return CoolifyError(ErrorKind.SCOPED_REFUSED, message, status=status, method=method, path=path)
         missing = _MISSING_RIGHT.search(message)
@@ -255,8 +321,11 @@ class CoolifyClient:
             return self._transport(method, url, headers, body, self.timeout)
         except OSError as error:
             reason = getattr(error, "reason", None) or error
-            raise CoolifyError(ErrorKind.UNREACHABLE, str(reason),
-                               method=method, path=path) from None
+            raise CoolifyError(ErrorKind.UNREACHABLE, str(reason), method=method, path=path,
+                               sent=not never_left(error)) from None
+        except ValueError:  # http.client's text for a bad header quotes the header, token included
+            raise CoolifyError(ErrorKind.UNREACHABLE, HEADER_UNSAFE_NOTE, method=method, path=path,
+                               sent=False) from None
 
     def request(self, method: str, path: str, *, params: Optional[Mapping[str, Any]] = None,
                 json_body: Any = None) -> Any:
@@ -271,6 +340,11 @@ class CoolifyClient:
                               self._headers(extra), body)
         payload = _decode(response.body)
         if 200 <= response.status < 300:
+            # Coolify's API answers JSON everywhere except /version (a bare version string). Any other
+            # text is someone else's page, and reading it as an answer would claim rights and health.
+            if isinstance(payload, str) and not (path == "/version" and _VERSION.fullmatch(payload.strip())):
+                raise CoolifyError(ErrorKind.UNREACHABLE, WEB_PAGE_NOTE, status=response.status,
+                                   method=method, path=shown_path, sent=False)
             return payload
         raise error_for_status(response.status, payload, method, shown_path, response.headers)
 
@@ -283,7 +357,7 @@ class CoolifyClient:
     def mcp_call(self, method: str, params: Optional[Mapping[str, Any]] = None) -> Any:
         """One JSON-RPC request to Coolify's MCP endpoint (`<base>/mcp`); returns `result`.
 
-        Coolify answers plain JSON without a session header (probe P6); an SSE `data:` line is
+        Coolify answers plain JSON without a session header (measured on 4.6); an SSE `data:` line is
         accepted as well. A JSON-RPC error becomes `CoolifyError(server)`.
         """
         self._mcp_id += 1
@@ -297,8 +371,14 @@ class CoolifyClient:
         if not 200 <= response.status < 300:
             raise error_for_status(response.status, payload, "POST", "/mcp", response.headers)
         if isinstance(payload, str):
-            payload = next((json.loads(line[5:]) for line in payload.splitlines()
-                            if line.startswith("data:")), None)
+            lines = [line[5:] for line in payload.splitlines() if line.startswith("data:")]
+            if not lines:
+                raise CoolifyError(ErrorKind.UNREACHABLE, WEB_PAGE_NOTE, status=response.status,
+                                   method="POST", path="/mcp", sent=False)
+            try:
+                payload = json.loads(lines[0])
+            except ValueError:
+                payload = None
         if not isinstance(payload, dict):
             raise CoolifyError(ErrorKind.SERVER, "the MCP endpoint did not answer JSON-RPC",
                                status=response.status, method="POST", path="/mcp")
@@ -314,9 +394,9 @@ def fetch_public_json(url: str, *, timeout: float = DEFAULT_TIMEOUT,
     try:
         response = transport("GET", url, {"Accept": "application/json", "User-Agent": USER_AGENT},
                              None, timeout)
-    except OSError as error:
+    except (OSError, ValueError):
         raise CoolifyError(ErrorKind.UNREACHABLE, f"no answer from {urllib.parse.urlparse(url).netloc}",
-                           method="GET", path=url) from error
+                           method="GET", path=url) from None
     payload = _decode(response.body)
     if not 200 <= response.status < 300:
         raise error_for_status(response.status, payload, "GET", url, response.headers)
