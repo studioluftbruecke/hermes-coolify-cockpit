@@ -199,7 +199,8 @@ request carries the user agent `hermes-coolifybruecke` and no instance data.
   metrics for 60 seconds. The overview reads the instance version at most every 10 minutes.
 - The token check (`coolify_capabilities`, the settings page's connection card and the page's
   availability check) runs at most once every 2 minutes for all of them together
-  (`capabilities-cache.json`); `coolify_capabilities` with `refresh` checks again at once.
+  (`capabilities-cache.json`); `coolify_capabilities` with `refresh` checks again at once, and so
+  does the **Check again** button unless the last check is younger than 10 seconds.
 - A followed deployment's history looks its application up in the last snapshot, so polling it
   every 5 seconds reads only that history.
 - With the Desktop half switched on, Hermes Desktop polls only while it is open. The status-bar

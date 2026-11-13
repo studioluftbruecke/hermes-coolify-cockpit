@@ -771,17 +771,20 @@ class SnapshotCache:
         return memory
 
     def get_or_build(self, key: str, build: Callable[[Optional[dict]], dict], *, path: Optional[Path] = None,
-                     refresh: bool = False) -> tuple[dict, dict]:
+                     refresh: bool = False, refresh_floor_s: float = 0.0) -> tuple[dict, dict]:
         """Return (snapshot dict, cache info). One build at a time per process.
 
         `build` receives the newest stored snapshot of any age (or None), so it can start its
-        reads with what that snapshot learned (`ReadHint`).
+        reads with what that snapshot learned (`ReadHint`). `refresh` builds anew unless the stored
+        snapshot is younger than `refresh_floor_s` (a caller that waited on the lock behind a build
+        that just finished, or repeated clicks).
         """
         with self._lock:
             now = self._clock()
             memory = self._memory.get(key)
             stored = memory if self._fresh(memory, now) else (self._read_file(path, key) or memory)
-            if not refresh and stored is not None and self._fresh(stored, now):
+            reuse = not refresh or (stored is not None and now - stored[0] < refresh_floor_s)
+            if reuse and stored is not None and self._fresh(stored, now):
                 self._memory[key] = stored
                 layer = "memory" if stored is memory else "file"
                 return stored[1], {"hit": layer, "age_s": round(now - stored[0], 1), "ttl_s": self.ttl_s}

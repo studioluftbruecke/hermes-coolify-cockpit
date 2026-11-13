@@ -55,6 +55,13 @@ After the token is saved, one result line takes the place of the explanation, fo
 read, deploy · no servers" and a button **Add a read-only token**. A token that holds `write` or
 `delete` gets an amber chip "can change and delete".
 
+**Check again** sits under that line, on the page's Connection widget and on the settings page. One
+click reads the settings again (a token you just saved included), runs the connection and rights
+check anew, and shows the result and when it ran. Use it after you change something outside Hermes,
+such as a token's rights in Coolify or an allow-list in front of it; otherwise the page reuses a
+check for up to 2 minutes. A click within 10 seconds of the last check shows that check, with its
+time.
+
 The settings form, in its order:
 
 | Setting | What to enter |

@@ -1122,6 +1122,83 @@ function TokenBlock({ token, showProjects }) {
   )
 }
 
+// 0.2.4 "Check again": { profile, running, at } shared by every place that shows the button, so the
+// settings page and the cockpit's Connection widget show one check. `at` is when the last click
+// finished (ISO); a successful check shows the backend's own checked_at instead.
+const $check = atom({ profile: null, running: false, at: null })
+
+// One click: read /setup again (a token saved in the settings form since the page loaded), then,
+// once the setup is complete, run the rights check anew (?refresh=true skips the shared 2-minute
+// check) and let the cards that depend on it ask again.
+function useCheckAgain() {
+  const profile = useProfile()
+  const client = useQueryClient()
+  const state = useValue($check)
+  const run = async () => {
+    if ($check.get().running) return
+    $check.set({ profile, running: true, at: state.profile === profile ? state.at : null })
+    try {
+      const setup = await client.fetchQuery({ queryKey: qk(profile, 'setup'), queryFn: () => rest('/setup'), staleTime: 0 })
+      if (setup && setup.configured) {
+        // fetchQuery joins a plain /capabilities fetch already in flight (page load, poll, focus),
+        // which would answer from the shared check; cancel it so the click sends ?refresh=true.
+        await client.cancelQueries({ queryKey: qk(profile, 'capabilities') })
+        await client
+          .fetchQuery({ queryKey: qk(profile, 'capabilities'), queryFn: () => rest('/capabilities?refresh=true'), staleTime: 0 })
+          .catch(() => null) // the error state shows in the card
+        for (const key of ['availability', 'actions', 'snapshot']) void client.invalidateQueries({ queryKey: qk(profile, key) })
+      }
+    } catch (error) {
+      log('check again failed', { status: error.status, message: error.message })
+    } finally {
+      $check.set({ profile, running: false, at: new Date().toISOString() })
+    }
+  }
+  return { running: state.running, at: state.profile === profile ? state.at : null, run }
+}
+
+function CheckAgain({ at }) {
+  const check = useCheckAgain()
+  const [, tick] = useState(0)
+  useEffect(() => { // "Checked N s ago" counts up while nothing else re-renders the line
+    const timer = setInterval(() => tick(n => n + 1), 15000)
+    return () => clearInterval(timer)
+  }, [])
+  const when = check.running ? 'Checking…' : at || check.at ? 'Checked ' + ago(at || check.at) + '.' : null
+  return el(
+    'div',
+    { 'data-cc-check': check.running ? 'running' : 'idle', style: { ...S.row(8), flexWrap: 'wrap' } },
+    el(Button, { disabled: check.running, onClick: check.run, size: 'xs', variant: 'secondary' },
+      el(Codicon, { name: 'refresh', size: '0.75rem', spinning: check.running }), 'Check again'),
+    when ? el('span', { role: 'status', style: S.small }, when) : null
+  )
+}
+
+// The setup line while the URL or every token is missing (no Coolify request is made then).
+function notSetUpLine(data) {
+  const steps = new Map(((data && data.steps) || []).map(step => [step.id, step]))
+  const url = steps.get('url') || {}
+  const noToken = !(steps.get('action_token') || {}).set && !(steps.get('read_token') || {}).set
+  if (url.error) return 'Not set up: ' + plain(url.error).replace(/\.$/, '') + '. Fix it' + (noToken ? ' and add a token' : '') + ' in the plugin settings.'
+  const missing = []
+  if (!url.set) missing.push('the Coolify URL')
+  if (noToken) missing.push('a token')
+  return 'Not set up: add ' + (missing.join(' and ') || 'the settings') + ' in the plugin settings.'
+}
+
+// The setup line while the Hermes half is off in this profile (the cockpit's setup step 1).
+function PluginOffLine() {
+  return el(
+    'div',
+    { 'data-cc-setup-result': 'off', style: S.col(6) },
+    el('div', { style: { ...S.row(8), flexWrap: 'wrap' } },
+      el(StatusDot, { tone: 'muted' }),
+      el('span', { style: { ...S.strong, color: T.primary } }, 'Turn on the plugin in this profile.'),
+      el(Button, { onClick: () => host.navigate(PLUGINS_PAGE), size: 'xs', variant: 'outline' }, el(Codicon, { name: 'extensions', size: '0.75rem' }), 'Open Plugins')),
+    el(Small, {}, 'Switch on Coolifybrücke in Capabilities, Plugins.')
+  )
+}
+
 function featureName(text) {
   const s = String(text || '')
   const i = s.indexOf(': ')
@@ -1159,16 +1236,33 @@ function ProtectedLine({ protectedEnvs }) {
 }
 
 function ConnectionWidget({ widget }) {
+  const setup = useSetup()
+  const setupNow = setupState(setup)
   const caps = useCapabilities()
   const props = widget.props || {}
-  if (caps.isLoading) return el(Loading, { rows: 4 })
-  if (caps.error) return el(QueryError, { error: caps.error, what: 'Capabilities' })
+  if (setupNow === 'needed') {
+    return el(
+      'div',
+      { style: S.col(10) },
+      el('div', { 'data-cc-setup-result': 'needed', style: { ...S.row(8), flexWrap: 'wrap' } },
+        el(StatusDot, { tone: 'muted' }), el('span', { style: { ...S.strong, color: T.primary } }, notSetUpLine(setup.data))),
+      el(CheckAgain, {})
+    )
+  }
+  // The capabilities query runs only once the setup is 'ready'; in the other states it is idle
+  // (neither loading nor failed), so each of them gets its own line here.
+  if (setupNow === 'off') return el('div', { style: S.col(10) }, el(PluginOffLine, {}), el(CheckAgain, {}))
+  if (setupNow === null && setup.error) return el('div', { 'data-cc-setup-result': 'error', style: S.col(10) }, el(QueryError, { error: setup.error, what: 'Setup' }), el(CheckAgain, {}))
+  if (setupNow === null) return el('div', { 'data-cc-setup-result': 'loading', style: S.col(10) }, el(Loading, { rows: 4 }))
+  if (caps.isLoading) return el('div', { style: S.col(10) }, el(CheckAgain, {}), el(Loading, { rows: 4 }))
+  if (caps.error) return el('div', { style: S.col(10) }, el(QueryError, { error: caps.error, what: 'Capabilities' }), el(CheckAgain, {}))
   const data = caps.data || {}
   const inst = data.instance || {}
   return el(
     'div',
     { style: S.col(10) },
     el(SetupResult, { setup: data.setup }),
+    el(CheckAgain, { at: data.checked_at }),
     el(ProtectedLine, { protectedEnvs: data.protected }),
     el(
       'div',
@@ -1223,7 +1317,7 @@ function ConnectionWidget({ widget }) {
       ? el('div', { style: S.col(4) }, ...data.warnings.map((w, i) => el(Note, { key: i, tone: 'warn' }, plain(w))))
       : null,
     data.hint ? el(Note, { tone: 'warn' }, data.hint) : null,
-    el(Small, { style: { color: T.quaternary } }, 'Checked ' + ago(data.checked_at) + '. ' + TOKEN_HINT)
+    el(Small, { style: { color: T.quaternary } }, TOKEN_HINT)
   )
 }
 
@@ -2383,7 +2477,6 @@ function CockpitPage() {
   const client = useQueryClient()
   const setup = useSetup()
   const setupNow = setupState(setup)
-  const [checking, setChecking] = useState(false)
   const layoutQ = useLayout()
   const snap = useSnapshot()
   const caps = useCapabilities()
@@ -2487,14 +2580,6 @@ function CockpitPage() {
   const anyError = setup.error || layoutQ.error || snap.error || caps.error
   const coldStart = useColdStart(!anyError && (setup.isLoading || layoutQ.isLoading || (setupNow === 'ready' && (snap.isLoading || caps.isLoading))))
   const onboarding = setupNow === 'off' || setupNow === 'needed'
-  const checkSetup = async () => {
-    setChecking(true)
-    try {
-      await setup.refetch()
-    } finally {
-      setChecking(false)
-    }
-  }
 
   return el(
     'div',
@@ -2532,7 +2617,7 @@ function CockpitPage() {
       ),
       el(Banner, {}),
       coldStart ? el('div', { 'data-cc-notice': 'cold-start', role: 'status' }, el(Note, {}, COLD_START_TEXT)) : null,
-      onboarding ? el(SetupPanel, { checking, data: setup.data, onCheck: checkSetup, state: setupNow }) : null,
+      onboarding ? el(SetupPanel, { data: setup.data, state: setupNow }) : null,
       onboarding ? null : el(ActionTracker, {}),
       editing && draft
         ? el(EditToolbar, { catalog: layoutQ.data, dirty, draft, onCancel: stopEdit, onPreset: setPreset, onSave: save, saving, setDraft })
@@ -2616,7 +2701,7 @@ function SetupStep({ n, done, optional, title, status, children, action }) {
 // 0.1.0 (PLAN-v0.1, Tokens and setup): two steps, each one line and one button. The detail sits
 // behind "Why?". The optional read-only token never shows here: the result line offers it when the
 // saved token is limited to some projects.
-function SetupPanel({ state, data, onCheck, checking }) {
+function SetupPanel({ state, data }) {
   const profile = useProfile()
   const [why, setWhy] = useState(false)
   const steps = new Map(((data && data.steps) || []).map(step => [step.id, step]))
@@ -2656,11 +2741,7 @@ function SetupPanel({ state, data, onCheck, checking }) {
         el('span', { style: S.text }, 'on all projects.'),
         el('button', { type: 'button', onClick: () => setWhy(!why), style: { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.tertiary, fontSize: '0.75rem', textDecoration: 'underline' } }, why ? 'Hide' : 'Why?')),
       why ? el(Small, {}, 'Read shows your apps, deploys and servers. Deploy adds the Deploy and Restart buttons. Each agent action still asks you, and the agent stays off protected environments. The token is stored in this profile; the cockpit shows only its fingerprint. If API access is off: Coolify, Settings, Advanced.') : null),
-    el(
-      'div',
-      { style: { ...S.row(10), flexWrap: 'wrap' } },
-      el(Button, { disabled: checking, onClick: onCheck, size: 'xs', variant: 'secondary' }, el(Codicon, { name: 'refresh', size: '0.75rem', spinning: checking }), 'Check again')
-    )
+    el(CheckAgain, {})
   )
 }
 
@@ -2796,12 +2877,12 @@ export default {
     pluginCtx = ctx
     ctx.register({ id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => jsx(CockpitPage, {}) })
     // The sidebar row: brand, show switch and position from this Desktop's storage (D3: 54).
-    sidebarRow = startSidebarRow(ctx, { brand: 'Coolifybrücke', path: PATH, codicon: 'dashboard', defaultPosition: 54, sdk: SIDEBAR_SDK })
+    sidebarRow = startSidebarRow(ctx, { brand: 'Coolifybrücke', path: PATH, codicon: 'cloud', defaultPosition: 54, sdk: SIDEBAR_SDK })
     ctx.register({ id: 'chip', area: STATUSBAR_AREAS.right, order: 70, render: () => jsx(CockpitChip, {}) })
     // Settings, Plugins: the same name and icon as the sidebar row. Desktop folds the plugin's
     // settings form (plugin.yaml config_schema) under this entry as its "Agent settings" page.
     if (typeof ctx.registerSettingsPage === 'function') {
-      ctx.registerSettingsPage({ id: 'settings', title: NAV_LABEL, icon: 'dashboard', order: 55, render: () => jsx(SettingsPage, {}) })
+      ctx.registerSettingsPage({ id: 'settings', title: NAV_LABEL, icon: 'cloud', order: 55, render: () => jsx(SettingsPage, {}) })
     }
     ctx.register({
       id: 'open',

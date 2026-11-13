@@ -1,8 +1,9 @@
 """Backend routes for the Coolifybrücke pane, mounted at `/api/plugins/coolifybruecke/`.
 
     GET /setup                            which settings are filled in (no Coolify request, no token value)
-    GET /capabilities                     the token setup report (same as coolify_capabilities),
-                                          one check shared by every caller for 2 minutes
+    GET /capabilities[?refresh=true]      the token setup report (same as coolify_capabilities),
+                                          one check shared by every caller for 2 minutes;
+                                          refresh=true is the page's "Check again"
     GET /snapshot[?refresh=true]          the Snapshot (servers, resources, deployments), 10 s cache
     GET /resources/{uuid}/deployments     deployment history of one application (?take=N, max 50)
     GET /actions                          the ActionSpec registry and whether the API token holds deploy
@@ -105,8 +106,8 @@ def setup() -> JSONResponse:
 
 
 @router.get("/capabilities")
-def capabilities() -> JSONResponse:
-    return _reply(_plugin().api_capabilities(_get_setting, _get_secret))
+def capabilities(refresh: bool = Query(False)) -> JSONResponse:
+    return _reply(_plugin().api_capabilities(_get_setting, _get_secret, refresh=refresh))
 
 
 @router.get("/snapshot")

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.4
+
+A "Check again" button, and a cloud icon (Konstantin's feedback of 2026-11-12).
+
+- **Check again** under the setup line (the Connection widget, the settings page and the setup
+  steps). One click reads the settings again, so a token saved in the settings form after the page
+  opened is used at once, then runs the connection and rights check anew and shows the result and
+  when it ran. While it runs, the button spins and the line says "Checking…". Before, the page
+  reused a check for up to 2 minutes, so a fix outside Hermes (a token's rights in Coolify, an
+  allow-list in front of it) showed only after that.
+- `GET /capabilities?refresh=true` is the button's route. Without it, the route shares one check
+  for 2 minutes with the agent's tool, as before.
+- While the URL or every token is missing, the settings page says what to add instead of an empty
+  card.
+- The sidebar row and the settings entry use the codicon `cloud` instead of `dashboard`. Desktop
+  takes only its built-in codicons on both places (Hermes 0.23.1), so a drawn cloud is not possible.
+- A click while the page's own capabilities request is still running (page load, the 5-minute poll,
+  a focus refetch) now cancels that request and checks anew. Before, the click joined it and got
+  the shared check.
+- The settings page's connection card says "Turn on the plugin in this profile." while the Hermes
+  half is off there, shows a placeholder while the settings load, and names the error when they
+  fail to load. Before, all three showed an empty card ("Coolify ?").
+- A stored URL that is not valid is named on the setup line ("Not set up: the Coolify URL must
+  start with http:// or https:// and name a host. Fix it in the plugin settings."), instead of
+  "add the Coolify URL".
+- "Checked N s ago" counts up every 15 seconds while the line is open.
+- A click on **Check again** within 10 seconds of the last check answers from that check. One
+  check costs about 50 Coolify requests, and Coolify allows 200 per minute per user. The agent's
+  `coolify_capabilities` with `refresh` still checks at once.
+
 ## 0.2.3
 
 Alerts use Hermes' public cron command (catalog review).

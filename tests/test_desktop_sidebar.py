@@ -5,7 +5,7 @@ Desktop half in node, with the three imports (`@hermes/plugin-sdk`, `react`, `re
 swapped for small stubs, calls its `register(ctx)` against a fake ctx whose `register` replaces an
 entry by id (as Desktop's registry does), and checks what this plugin wires up:
 
-- one sidebar row, id `nav`, labelled "Coolifybrücke", codicon `dashboard`, path `/coolifybruecke`,
+- one sidebar row, id `nav`, labelled "Coolifybrücke", codicon `cloud`, path `/coolifybruecke`,
   at 54 with nothing stored (D3), at the stored position, and none when stored hidden;
 - the palette row "Open Coolifybrücke" stays registered while the row is hidden, so the hidden hint
   names a command that exists;
@@ -74,11 +74,11 @@ const out = {}
 let ctx
 
 ctx = fakeCtx(); plugin.register(ctx)
-out.default_row = view(ctx) === 'nav@54:Coolifybrücke:dashboard:/coolifybruecke'
+out.default_row = view(ctx) === 'nav@54:Coolifybrücke:cloud:/coolifybruecke'
 out.one_nav_row = nav(ctx).length === 1 && ctx.stored() === undefined
 
 ctx = fakeCtx({ show: true, position: 12 }); plugin.register(ctx)
-out.stored_position = view(ctx) === 'nav@12:Coolifybrücke:dashboard:/coolifybruecke'
+out.stored_position = view(ctx) === 'nav@12:Coolifybrücke:cloud:/coolifybruecke'
 
 ctx = fakeCtx({ show: false, position: 54 }); plugin.register(ctx)
 const palette = ctx.rows.find(r => r.area === 'palette')
@@ -89,7 +89,7 @@ out.hidden_keeps_palette = nav(ctx).length === 0 && palette.data.label === 'Open
 // The settings page: the Sidebar section is bound to the row register() made.
 ctx = fakeCtx(); plugin.register(ctx)
 const page = ctx.pages.find(p => p.id === 'settings')
-out.settings_entry = Boolean(page) && page.title === 'Coolifybrücke' && page.icon === 'dashboard'
+out.settings_entry = Boolean(page) && page.title === 'Coolifybrücke' && page.icon === 'cloud'
 const pageEl = page.render()
 const settingsTree = pageEl.type(pageEl.props)
 const sections = find(settingsTree, n => n.props && n.props.row && n.props.sdk)
@@ -110,7 +110,7 @@ const field = find(section, n => n.type === 'Input')[0]
 const target = { value: '3' }
 field.props.onKeyDown({ key: 'Enter', target })
 find(render(), n => n.type === 'Switch')[0].props.onCheckedChange(true)
-out.field_moves = view(ctx) === 'nav@3:Coolifybrücke:dashboard:/coolifybruecke' && JSON.stringify(ctx.stored()) === '{"show":true,"position":3}'
+out.field_moves = view(ctx) === 'nav@3:Coolifybrücke:cloud:/coolifybruecke' && JSON.stringify(ctx.stored()) === '{"show":true,"position":3}'
 
 process.stdout.write('\nRESULT ' + JSON.stringify(out) + '\n')
 """

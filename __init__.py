@@ -83,6 +83,10 @@ def _caps():
 # (/capabilities and /layout?availability=true) and the agent's tool asks too, in another process,
 # so every caller shares one check through `capabilities-cache.json` in the plugin data dir.
 CAPABILITIES_TTL_S = 120.0
+# The page's "Check again" (refresh) reuses a check younger than this: repeated clicks and several
+# Desktop windows would otherwise each cost a full check against the same rate limit. The agent's
+# tool keeps refresh=True as "check now" (it is called after the user changed something in Coolify).
+CAPABILITIES_REFRESH_FLOOR_S = 10.0
 CAPABILITIES_CACHE_FILE = "capabilities-cache.json"
 _CAPABILITIES_CACHES: dict[str, Any] = {}
 
@@ -97,7 +101,8 @@ def _capabilities_cache(data_dir: Any):
 
 
 def capabilities_bundle(get_setting: SettingGetter, get_secret: SecretGetter, *, transport: Any = None,
-                        data_dir: Any = "default", refresh: bool = False) -> dict:
+                        data_dir: Any = "default", refresh: bool = False,
+                        refresh_floor_s: float = 0.0) -> dict:
     """{"model": the tool's report, "features": per-feature availability, "cache": {...}}.
 
     Built at most once per CAPABILITIES_TTL_S per data dir, across processes; without a data dir
@@ -126,19 +131,21 @@ def capabilities_bundle(get_setting: SettingGetter, get_secret: SecretGetter, *,
         return {**build(None), "cache": {"hit": None, "age_s": 0.0, "ttl_s": 0.0}}
     key = _snap().cache_key(connection) + ("|updates" if check_updates else "|no-updates")
     bundle, info = _capabilities_cache(data_dir).get_or_build(
-        key, build, path=data_dir / CAPABILITIES_CACHE_FILE, refresh=refresh)
+        key, build, path=data_dir / CAPABILITIES_CACHE_FILE, refresh=refresh,
+        refresh_floor_s=refresh_floor_s)
     return {**bundle, "cache": info}
 
 
 def capabilities_report(get_setting: SettingGetter, get_secret: SecretGetter, *,
-                        transport: Any = None, data_dir: Any = "default", refresh: bool = False) -> dict:
+                        transport: Any = None, data_dir: Any = "default", refresh: bool = False,
+                        refresh_floor_s: float = 0.0) -> dict:
     """Read the setup, probe it (or reuse a check younger than CAPABILITIES_TTL_S), and return the
     model-facing report (a dict)."""
     caps_mod = _caps()
     client_mod = importlib.import_module(".coolify_client", __package__ or __name__)
     try:
         bundle = capabilities_bundle(get_setting, get_secret, transport=transport, data_dir=data_dir,
-                                     refresh=refresh)
+                                     refresh=refresh, refresh_floor_s=refresh_floor_s)
     except caps_mod.ConfigError as error:
         return {"ok": False, "error": "not_configured", "message": str(error)}
     except client_mod.CoolifyError as error:  # rate_limited: no partial rights are reported
@@ -534,9 +541,13 @@ def _with_hint(body: dict) -> dict:
     return {**body, "hint": TOKEN_REFRESH_HINT} if stale else body
 
 
-def api_capabilities(get_setting: SettingGetter, get_secret: SecretGetter, *, transport: Any = None) -> tuple[int, dict]:
+def api_capabilities(get_setting: SettingGetter, get_secret: SecretGetter, *, transport: Any = None,
+                     data_dir: Any = "default", refresh: bool = False) -> tuple[int, dict]:
+    """refresh=True is the page's "Check again": it skips the shared 2-minute check, unless the last
+    check is younger than CAPABILITIES_REFRESH_FLOOR_S (the agent's tool has no such floor)."""
     try:
-        report = capabilities_report(get_setting, get_secret, transport=transport)
+        report = capabilities_report(get_setting, get_secret, transport=transport, data_dir=data_dir,
+                                     refresh=refresh, refresh_floor_s=CAPABILITIES_REFRESH_FLOOR_S)
     except Exception as error:
         return 500, _failure(error)
     if not report.get("ok"):
