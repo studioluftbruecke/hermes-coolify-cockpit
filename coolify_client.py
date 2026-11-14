@@ -17,10 +17,11 @@ branch on a value, not on status codes or exception classes:
     bad_request     any other 4xx (validation, method not allowed)
     server          5xx, or an answer that is not what the endpoint promises
 
-`sent` on the error says whether the request may have reached Coolify: False when it never left
-this machine (DNS, refused connection, TLS, a header that could not be built) or when something in
-front of Coolify answered instead (a redirect, a web page, a proxy's 403); True for every answer
-from Coolify and for a connection that broke or went silent after the request left.
+`sent` on the error says whether the request may have reached Coolify: False only for a failure
+proven to happen before request bytes were sent (DNS, a refused connection, a header that could not
+be built) or when something in front of Coolify answered instead (a redirect, a web page, a proxy's
+403); True for every answer from Coolify and for a connection that broke or went silent after the
+request left.
 
 Coolify's API rate limit (4.6.0, app/Providers/RouteServiceProvider.php): API_RATE_LIMIT requests
 per minute, 200 by default, counted per Coolify user, so every token of that user spends from one
@@ -118,9 +119,9 @@ class HttpResponse:
 
 
 # (method, url, headers, body, timeout) -> HttpResponse for any HTTP status.
-# Raises OSError (urllib.error.URLError, timeouts, resets) when no HTTP answer arrives. urllib wraps
-# every failure before the request is fully written (DNS, connect, TLS) in URLError, and lets one
-# while waiting for the answer through as it is.
+# Raises OSError (urllib.error.URLError, timeouts, resets) when no HTTP answer arrives. URLError
+# wraps connection and request-write failures, but the wrapper alone does not prove that no request
+# bytes were sent; classify its concrete reason instead.
 Transport = Callable[[str, str, Mapping[str, str], Optional[bytes], float], HttpResponse]
 
 
@@ -157,10 +158,12 @@ HEADER_UNSAFE_NOTE = ("the request could not be built: a token or setting holds 
 
 
 def never_left(error: OSError) -> bool:
-    """True when the request cannot have left this machine: urllib's URLError (raised before the
-    request was fully written), a refused connection or a failed name lookup."""
+    """True only when the concrete error proves no request bytes were sent.
+
+    URLError also wraps resets while a large body is being written, so its type alone proves nothing.
+    """
     reason = getattr(error, "reason", None)
-    return isinstance(error, (urllib.error.URLError, ConnectionRefusedError, socket.gaierror)) or \
+    return isinstance(error, (ConnectionRefusedError, socket.gaierror)) or \
         isinstance(reason, (ConnectionRefusedError, socket.gaierror))
 
 

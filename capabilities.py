@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import urlsplit
 
 try:
     from .coolify_client import (CoolifyClient, CoolifyError, ErrorKind, LimitWatch, Transport,
@@ -127,16 +128,19 @@ def connection_from_settings(url: Optional[str], action_token: Optional[str],
     if not action and not read:
         raise ConfigError(f"No Coolify token set. Store an API token as {ACTION_SETTING} in the "
                           f"plugin settings; optionally a team-wide read-only token as {READ_SETTING}.")
+    notes = []
+    if base.startswith("http://") and urlsplit(base).hostname not in {"localhost", "127.0.0.1", "::1"}:
+        notes.append(f"{URL_SETTING} uses plain HTTP; tokens are sent without encryption. Use HTTPS outside localhost.")
     if action and read and action == read:
-        return Connection(base, (TokenSlot(Role.SINGLE, action, ACTION_SETTING),),
-                          (f"{ACTION_SETTING} and {READ_SETTING} hold the same token; it is used as the "
-                           "only token.",))
-    if action and read:
-        return Connection(base, (TokenSlot(Role.ACTION, action, ACTION_SETTING),
-                                 TokenSlot(Role.OVERVIEW, read, READ_SETTING)))
-    if action:
-        return Connection(base, (TokenSlot(Role.SINGLE, action, ACTION_SETTING),))
-    return Connection(base, (TokenSlot(Role.SINGLE, read, READ_SETTING),))
+        slots = (TokenSlot(Role.SINGLE, action, ACTION_SETTING),)
+        notes.append(f"{ACTION_SETTING} and {READ_SETTING} hold the same token; it is used as the only token.")
+    elif action and read:
+        slots = (TokenSlot(Role.ACTION, action, ACTION_SETTING), TokenSlot(Role.OVERVIEW, read, READ_SETTING))
+    elif action:
+        slots = (TokenSlot(Role.SINGLE, action, ACTION_SETTING),)
+    else:
+        slots = (TokenSlot(Role.SINGLE, read, READ_SETTING),)
+    return Connection(base, slots, tuple(notes))
 
 
 @dataclass
@@ -643,9 +647,8 @@ def build_capabilities(connection: Connection, *, check_updates: bool = True,
                            release_feed=release_feed)
     watch.raise_if_limited()
     features = [evaluate(rule, tokens, facts) for rule in FEATURE_RULES]
-    return Capabilities(connection.base_url, facts, tokens, features, routing_table(tokens),
-                        setup_warnings(tokens, facts, connection.notes) if facts.reachable else [],
-                        _now())
+    warnings = setup_warnings(tokens, facts, connection.notes) if facts.reachable else list(connection.notes)
+    return Capabilities(connection.base_url, facts, tokens, features, routing_table(tokens), warnings, _now())
 
 
 # --- model-facing rendering --------------------------------------------------------------------

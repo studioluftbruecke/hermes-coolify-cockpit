@@ -1,0 +1,19 @@
+{
+  "note": "The resource name and project are anonymized (the residue gate keeps the owner's name out of the plugin folder). Real /api/plugins/coolifybruecke/snapshot bodies, trimmed to one staging application's resources[] entry and its fleet row. Measured 2026-11-13 through a real attended turn that stopped and then started the app with coolify_action (milestone SS-3, brain page coolifybruecke-ss3-live-proof.md). No env values, no tokens.",
+  "stopped": {
+    "resource": { "uuid": "i47ffdzgeflpczsosnujx8kv", "name": "website-staging", "kind": "application", "project": "Website", "environment": "staging", "status": "exited:unhealthy" },
+    "fleet": {
+      "state": "ok", "running": null, "behind": null, "checked": "lists", "failing_since": null, "env_changed_at": null,
+      "latest": { "uuid": "cm2zxe6rvoipnsc41pi1zbf8", "status": "finished", "commit": "114fa1d0bd4fe059ef615f4ff2b0129fcaf8ce92", "created_at": "2026-11-13T21:17:40.000000Z", "finished_at": "2026-11-13T21:17:55.000000Z", "trigger": "api" },
+      "last_good": { "uuid": "cm2zxe6rvoipnsc41pi1zbf8", "status": "finished", "commit": "114fa1d0bd4fe059ef615f4ff2b0129fcaf8ce92", "created_at": "2026-11-13T21:17:40.000000Z", "finished_at": "2026-11-13T21:17:55.000000Z", "trigger": "api" }
+    }
+  },
+  "running": {
+    "resource": { "uuid": "i47ffdzgeflpczsosnujx8kv", "name": "website-staging", "kind": "application", "project": "Website", "environment": "staging", "status": "running:healthy" },
+    "fleet": {
+      "state": "ok", "running": null, "behind": null, "checked": "lists", "failing_since": null, "env_changed_at": null,
+      "latest": { "uuid": "nuj85adlipzdxjmx8wxtfo41", "status": "finished", "commit": "114fa1d0bd4fe059ef615f4ff2b0129fcaf8ce92", "created_at": "2026-11-13T21:38:11.000000Z", "finished_at": "2026-11-13T21:38:27.000000Z", "trigger": "api" },
+      "last_good": { "uuid": "nuj85adlipzdxjmx8wxtfo41", "status": "finished", "commit": "114fa1d0bd4fe059ef615f4ff2b0129fcaf8ce92", "created_at": "2026-11-13T21:38:11.000000Z", "finished_at": "2026-11-13T21:38:27.000000Z", "trigger": "api" }
+    }
+  }
+}

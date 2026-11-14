@@ -152,6 +152,15 @@ def test_same_token_in_both_fields_is_one_single_token(kit):
     assert connection.notes
 
 
+def test_plain_http_warns_outside_loopback_without_changing_token_routing(kit):
+    remote = kit.caps.connection_from_settings("http://coolify.example.test", "tok-action", None)
+    assert [slot.role.value for slot in remote.slots] == ["single"]
+    assert len(remote.notes) == 1 and "Use HTTPS" in remote.notes[0]
+    for url in ("http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"):
+        local = kit.caps.connection_from_settings(url, "tok-action", None)
+        assert local.notes == ()
+
+
 def test_output_is_capped_and_carries_no_token(kit):
     out, _ = kit.report(action="scoped_read_deploy", read="teamwide_read")
     text = json.dumps(out)

@@ -270,8 +270,8 @@ WIDGET_TYPES: tuple[WidgetType, ...] = (
     WidgetType(
         "resources", "Apps",
         "Applications of every environment, grouped by environment, with filter chips, deployed commit and "
-        "its age, signal badges, Deploy and Restart; services and databases in a second group. A protected "
-        "environment shows a lock. Apps of one repository in two environments show as a pipeline pair.",
+        "its age, signal badges, Deploy, Restart, Stop and Start; services and databases in a second group. "
+        "A protected environment shows a lock. Apps of one repository in two environments show as a pipeline pair.",
         ("snapshot.resources", "snapshot.fleet", "actions"), "resources",
         {"project": _project(), "environment": _environment(),
          "kinds": Prop("list", "Only these kinds; empty: all.",
@@ -279,9 +279,10 @@ WIDGET_TYPES: tuple[WidgetType, ...] = (
          "name_contains": Prop("string", "Only resources whose name contains this."),
          "status": Prop("enum", "Only resources in this state.", "any",
                         choices=("any", "running", "stopped", "unhealthy", "attention")),
-         "row_actions": Prop("list", "Action buttons on every row (ActionSpec kinds without parameters); shown "
+         "row_actions": Prop("list", "Action buttons on every row (ActionSpec kinds without parameters); Stop "
+                                     "shows on a resource that runs, Start on one that is stopped; shown "
                                      "only where the API token holds deploy and sees the resource.",
-                             ["deploy", "restart"],
+                             ["deploy", "restart", "stop", "start"],
                              item=Prop("string", "Action kind.", choices=_ROW_ACTION_KINDS), max_items=6),
          "pairs": Prop("bool", "Show apps of one repository in two environments as a pipeline pair.", True),
          "show_env_keys": Prop("bool", "Show environment variable names (never values).", False)},
@@ -463,7 +464,7 @@ def _overview(_: dict) -> list[dict]:
     # What needs you, what happened last, every app, the servers.
     return [{"id": "summary", "type": "summary", "size": "l", "props": {}},
             {"id": "deployments", "type": "deployments", "size": "l", "props": {"limit": 8}},
-            {"id": "apps", "type": "resources", "size": "l", "props": {"row_actions": ["deploy", "restart"]}},
+            {"id": "apps", "type": "resources", "size": "l", "props": {"row_actions": ["deploy", "restart", "stop", "start"]}},
             {"id": "servers", "type": "servers", "size": "l", "props": {}}]
 
 
@@ -476,7 +477,7 @@ def _deploy_desk(params: dict) -> list[dict]:
                         "size": "s", "props": {"buttons": params["buttons"]}})
     widgets += [
         {"id": "deploy-apps", "type": "resources", "title": f"Apps: {env}", "size": "l",
-         "props": {**where, "row_actions": list(params.get("row_actions") or ["deploy", "restart"])}},
+         "props": {**where, "row_actions": list(params.get("row_actions") or ["deploy", "restart", "stop", "start"])}},
         {"id": "deploy-deployments", "type": "deployments", "title": f"Latest deploys: {env}", "size": "l",
          "props": {**where, "show": "all", "limit": 10}},
     ]
@@ -490,7 +491,7 @@ PRESET_LIST: tuple[Preset, ...] = (
            "buttons on top.",
            {"environment": Prop("string", "The environment, e.g. staging.", "staging"),
             "project": Prop("string", "Only this project."),
-            "row_actions": Prop("list", "Row actions on the apps widget.", ["deploy", "restart"],
+            "row_actions": Prop("list", "Row actions on the apps widget.", ["deploy", "restart", "stop", "start"],
                                 item=Prop("string", "Action kind.", choices=_ROW_ACTION_KINDS), max_items=6),
             "buttons": Prop("list", "Quick-action buttons pinned above the desk.", item=_ACTION_BUTTON,
                             max_items=12)},

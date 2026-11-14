@@ -129,8 +129,18 @@ def test_row_actions_take_parameterless_resource_actions_only(lay):
         return lay.validate_widget({"id": "r", "type": "resources", "props": {"row_actions": kinds}})
 
     assert rows(["deploy", "restart", "stop"]).props["row_actions"] == ["deploy", "restart", "stop"]
+    assert rows(["deploy", "restart", "stop", "start"]).props["row_actions"] == ["deploy", "restart", "stop", "start"]
     assert "rollback needs commit per click" in errors_of(lay, rows, ["rollback"])
     assert "unknown action 'nuke'" in errors_of(lay, rows, ["nuke"])
+
+
+def test_row_actions_defaults_carry_start_and_stop(lay):
+    # SS-2: a new layout gets all four small buttons (the cap is 6). A stored layout keeps whatever
+    # it saved (D13): nothing injects the default behind the user's back.
+    assert lay.TYPES["resources"].props_schema["row_actions"].default == ["deploy", "restart", "stop", "start"]
+    assert lay.validate_widget({"id": "r", "type": "resources", "props": {}}).props == {}
+    apps = [w for w in lay.preset_widgets("overview", None) if w.type == "resources"][0]
+    assert apps.props["row_actions"] == ["deploy", "restart", "stop", "start"]
 
 
 # --- presets -------------------------------------------------------------------------------------
@@ -156,7 +166,9 @@ def test_each_preset_round_trips_through_the_file(lay, tmp_path, name, params, t
 def test_deploy_desk_scopes_every_widget_to_the_environment(lay):
     widgets = lay.preset_widgets("deploy_desk", {"environment": "staging"})
     assert all(w.props.get("environment") == "staging" for w in widgets)
-    assert widgets[0].props["row_actions"] == ["deploy", "restart"]
+    assert widgets[0].props["row_actions"] == ["deploy", "restart", "stop", "start"]
+    narrowed = lay.preset_widgets("deploy_desk", {"environment": "staging", "row_actions": ["deploy"]})
+    assert narrowed[0].props["row_actions"] == ["deploy"]
 
 
 def test_preset_params_are_validated(lay):

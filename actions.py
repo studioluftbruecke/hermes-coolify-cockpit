@@ -42,12 +42,14 @@ try:
     from .capabilities import (ABILITY_PROBES, ACTION_SETTING, READ_SETTING, Ability, Connection, Role,
                                TokenSlot, probe_right)
     from .coolify_client import CoolifyClient, CoolifyError, ErrorKind, Transport, fingerprint, urllib_transport
+    from .diagnose import _UUID as DEPLOYMENT_UUID
     from .snapshot import KINDS, _environment_map, _resources
 except ImportError:  # loaded as a top-level module (tests, scripts)
     from capabilities import (ABILITY_PROBES, ACTION_SETTING, READ_SETTING, Ability,  # type: ignore
                               Connection, Role, TokenSlot, probe_right)
     from coolify_client import (CoolifyClient, CoolifyError, ErrorKind, Transport,  # type: ignore
                                 fingerprint, urllib_transport)
+    from diagnose import _UUID as DEPLOYMENT_UUID  # type: ignore
     from snapshot import KINDS, _environment_map, _resources  # type: ignore
 
 DEFAULT_TIMEOUT = 15.0
@@ -414,12 +416,20 @@ def resolve_resource(client: CoolifyClient, spec: ActionSpec, query: str, *,
                   _server_name_cached(client, found["kind"], found["uuid"], cache), status=found.get("status"))
 
 
-def resolve_deployment(client: CoolifyClient, deployment_uuid: str, *,
-                       environments: Optional[Mapping[int, tuple]] = None,
-                       cache: Optional[ViewCache] = None) -> Target:
+def _deployment_id(deployment_uuid: str) -> str:
     uuid = (deployment_uuid or "").strip()
     if not uuid:
         raise ActionRefused("bad_params", "Name the deployment to cancel by its uuid.")
+    if not DEPLOYMENT_UUID.fullmatch(uuid):
+        raise ActionRefused("bad_params", "deployment_uuid must be a Coolify deployment UUID "
+                                          "(letters, digits, - and _).")
+    return uuid
+
+
+def resolve_deployment(client: CoolifyClient, deployment_uuid: str, *,
+                       environments: Optional[Mapping[int, tuple]] = None,
+                       cache: Optional[ViewCache] = None) -> Target:
+    uuid = _deployment_id(deployment_uuid)
     try:
         row = client.get(f"/deployments/{uuid}")
     except CoolifyError as error:
@@ -495,6 +505,8 @@ def plan(connection: Connection, kind: Any, target: Any, params: Optional[Mappin
         raise ActionRefused("bad_params", "Name the target: a resource name or uuid"
                                           + (", or a deployment uuid for cancel." if spec.target == "deployment"
                                              else "."))
+    if spec.target == "deployment":
+        target = _deployment_id(str(target))
     slot = action_slot(connection)
     client = CoolifyClient(connection.base_url, slot.token, timeout=timeout, transport=transport)
     if not holds_deploy(client, ability_cache):

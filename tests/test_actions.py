@@ -275,6 +275,13 @@ def test_refused_to_cancel_a_deployment_outside_the_view_or_already_finished(pkg
     assert status == 409 and "finished" in body["message"]
 
 
+@pytest.mark.parametrize("target", ["abc/../other", "../other"])
+def test_a_malformed_deployment_id_is_refused_before_any_transport(pkg, target):
+    status, body, fake = _refused(pkg, {"kind": "cancel", "target": target}, "bad_params")
+    assert status == 400 and "deployment UUID" in body["message"]
+    assert fake.requests == []
+
+
 def test_refused_for_unknown_kind_wrong_kind_and_missing_commit(pkg):
     _refused(pkg, {"kind": "delete", "target": "app-stg"}, "unknown_kind")
     _refused(pkg, {"kind": "force_deploy", "target": "umami-staging"}, "wrong_kind")

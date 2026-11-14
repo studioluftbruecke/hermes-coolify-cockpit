@@ -162,7 +162,10 @@ def capabilities_report(get_setting: SettingGetter, get_secret: SecretGetter, *,
         out.pop("notebook", None)
         out.pop("notebook_error", None)
     out["cache"] = bundle["cache"]
-    out["protected"] = {"environments": protected_environments(get_setting),
+    protected_warnings: list[str] = []
+    environments = protected_environments(get_setting, protected_warnings)
+    out["warnings"] = [*out.get("warnings", []), *protected_warnings]
+    out["protected"] = {"environments": environments,
                         "agent_allowed": _as_bool(get_setting(PROTECTED_SWITCH, False), False)}
     return out
 
@@ -1036,17 +1039,33 @@ def _refusal(code: str, message: str) -> dict:
 PROTECTED_SETTING = "protected_environments"
 PROTECTED_SWITCH = "agent_on_protected"
 PROTECTED_DEFAULT = "production"
+PROTECTED_FALSE_LIKE = frozenset({"0", "false", "no", "off"})
+PROTECTED_WARNING = (f"Invalid {PROTECTED_SETTING} value; using the protected default "
+                     f"{PROTECTED_DEFAULT}. Set a comma-separated list of environment names.")
 
 
-def protected_environments(get_setting: SettingGetter) -> list[str]:
+def protected_environments(get_setting: SettingGetter, warnings: Optional[list[str]] = None) -> list[str]:
     raw = get_setting(PROTECTED_SETTING, PROTECTED_DEFAULT)
     if raw is None:
-        raw = PROTECTED_DEFAULT
-    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
-    named = sorted({str(x).strip().lower() for x in items if str(x).strip()})
+        return [PROTECTED_DEFAULT]
+    invalid = False
+    if isinstance(raw, str):
+        items = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        items = raw
+    else:
+        items = []
+        invalid = True
+    if not all(isinstance(item, str) for item in items):
+        invalid = True
+    named = [item.strip().lower() for item in items if isinstance(item, str)]
+    if invalid or any(name in PROTECTED_FALSE_LIKE for name in named):
+        if warnings is not None:
+            warnings.append(PROTECTED_WARNING)
+        return [PROTECTED_DEFAULT]
     # A cleared field means "the default", never "nothing": the agent acts on protected environments
     # only through its own switch, so emptying a text field cannot open production by accident.
-    return named or [PROTECTED_DEFAULT]
+    return sorted({name for name in named if name}) or [PROTECTED_DEFAULT]
 
 
 def is_protected(get_setting: SettingGetter, environment: Optional[str]) -> bool:

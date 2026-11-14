@@ -47,7 +47,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'coolifybruecke'
 // This half's version; equal to plugin.yaml's (a test checks). GET /setup names the Hermes half's.
-const VERSION = '0.2.6'
+const VERSION = '0.2.7'
 const PATH = '/coolifybruecke'
 const TAG = '[' + ID + ']'
 const SESSION_TITLE = 'Cockpit'
@@ -393,9 +393,11 @@ function hostOf(url) {
 
 function resourceTone(status) {
   const s = String(status || '')
+  // A stopped app reads exited:unhealthy (measured), so the stopped family is checked first and
+  // the dot shows stopped, not a health warning.
+  if (s.startsWith('exited') || s.startsWith('stopped') || s.includes('degraded')) return 'bad'
   if (s.includes('unhealthy')) return 'warn'
   if (s.startsWith('running')) return 'good'
-  if (s.startsWith('exited') || s.startsWith('stopped') || s.includes('degraded')) return 'bad'
   return 'muted'
 }
 
@@ -1596,12 +1598,24 @@ function DeploymentsWidget({ widget }) {
 
 // ── apps ─────────────────────────────────────────────────────────────────────────────────────────
 
+// One classifier feeds the row buttons, the status filter and the dot tone. SS-0 measured the
+// instance's vocabulary (brain `coolifybruecke-ss0-statuses.md`): every real status starts with
+// `running` (:healthy, :unknown, briefly :unhealthy) or `exited` (:unhealthy); Coolify also
+// documents `stopped`, `restarting`, `starting`, `created`, `degraded`, `exited:N`. Everything it
+// cannot place is unknown, and a row in an unknown state shows neither Stop nor Start.
+function statusClass(status) {
+  const s = String(status || '')
+  if (s.startsWith('running')) return 'running'
+  if (s.startsWith('exited') || s.startsWith('stopped')) return 'stopped'
+  return 'unknown'
+}
+
 function statusMatches(status, filter, attention) {
   const s = String(status || '')
   if (!filter || filter === 'any') return true
-  if (filter === 'running') return s.startsWith('running')
+  if (filter === 'running') return statusClass(s) === 'running'
   if (filter === 'unhealthy') return s.includes('unhealthy') && !s.startsWith('exited')
-  if (filter === 'stopped') return s.startsWith('exited') || s.startsWith('stopped')
+  if (filter === 'stopped') return statusClass(s) === 'stopped'
   if (filter === 'attention') return attention.length > 0
   return true
 }
@@ -1644,7 +1658,16 @@ function AppRow({ resource, row, items, rowActions, rights, locked, showEnvKeys 
   const isOpen = Boolean(open && open.uuid === resource.uuid)
   const failing = row && row.state === 'failing'
   const running = row && row.state === 'deploying'
-  const actions = (rowActions || []).filter(kind => rights.allows(kind, resource))
+  const stateClass = statusClass(resource.status)
+  const actions = (rowActions || []).filter(kind => {
+    if (!rights.allows(kind, resource)) return false
+    // Stop shows on a resource that runs, Start on one that is stopped, neither when the state is
+    // unknown: start on a running app queues a full redeploy (measured), and while a deployment of
+    // a stopped app is in flight it would queue a second one.
+    if (kind === 'stop') return stateClass === 'running'
+    if (kind === 'start') return stateClass === 'stopped' && !(row && row.state === 'deploying')
+    return true
+  })
   const deployed = row && row.last_good // what runs: the last finished deploy (none known: no commit shown)
   return el(
     'div',
@@ -2821,7 +2844,7 @@ function SetupPanel({ state, data }) {
         el(Badge, { variant: 'outline' }, 'deploy'),
         el('span', { style: S.text }, 'on all projects.'),
         el('button', { type: 'button', onClick: () => setWhy(!why), style: { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.tertiary, fontSize: '0.75rem', textDecoration: 'underline' } }, why ? 'Hide' : 'Why?')),
-      why ? el(Small, {}, 'Read shows your apps, deploys and servers. Deploy adds the Deploy and Restart buttons. Each agent action still asks you, and the agent stays off protected environments. The token is stored in this profile; the cockpit shows only its fingerprint. If API access is off: Coolify, Settings, Advanced.') : null),
+      why ? el(Small, {}, 'Read shows your apps, deploys and servers. Deploy adds the Deploy, Restart, Stop and Start buttons. Each agent action still asks you, and the agent stays off protected environments. The token is stored in this profile; the cockpit shows only its fingerprint. If API access is off: Coolify, Settings, Advanced.') : null),
     el(CheckAgain, {})
   )
 }
@@ -3068,7 +3091,7 @@ export default {
   id: ID,
   name: 'Coolifybrücke',
   version: VERSION,
-  description: 'What needs you on your Coolify instance: failing apps, latest deploys, servers. Deploy and restart behind a confirm.',
+  description: 'What needs you on your Coolify instance: failing apps, latest deploys, servers. Deploy, restart, stop and start behind a confirm.',
   defaultEnabled: false,
   register(ctx) {
     pluginCtx = ctx
@@ -3092,3 +3115,6 @@ export default {
     log('registered', { path: PATH })
   }
 }
+
+// Named for the tests; the Desktop loader reads only the default export.
+export { statusClass }

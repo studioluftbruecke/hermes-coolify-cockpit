@@ -2,6 +2,8 @@
 every Coolify answer to one typed error kind."""
 
 import json
+import socket
+import urllib.error
 
 import pytest
 
@@ -74,6 +76,24 @@ def test_client_maps_no_answer_to_unreachable_without_the_token(kit):
         client.get("/version")
     assert caught.value.kind.value == "unreachable"
     assert "secret-token-value" not in str(caught.value) + repr(client)
+
+
+@pytest.mark.parametrize("error,sent", [
+    (urllib.error.URLError(socket.gaierror(-2, "Name or service not known")), False),
+    (urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")), False),
+    (urllib.error.URLError("timed out"), True),
+    (urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer")), True),
+    (urllib.error.URLError(TimeoutError("timed out")), True),
+], ids=["dns", "refused", "generic", "reset", "timeout"])
+def test_only_proven_pre_send_failures_are_unsent(kit, error, sent):
+    def transport(method, url, headers, body, timeout):
+        raise error
+
+    client = kit.client.CoolifyClient(kit.BASE_URL, "tok", transport=transport)
+    with pytest.raises(kit.client.CoolifyError) as caught:
+        client.post("/deploy")
+    assert caught.value.kind.value == "unreachable"
+    assert caught.value.sent is sent
 
 
 def test_client_reads_plain_text_version_and_mcp_json(kit):

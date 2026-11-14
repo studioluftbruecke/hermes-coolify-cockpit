@@ -5,7 +5,7 @@ and let Hermes explain failed deploys.
 
 ![The Coolifybrücke page in Hermes Desktop: what needs you, the latest deploys, the apps by environment and the server charts](docs/screenshot-1.png)
 
-Version 0.2.0. MIT. Needs Hermes 0.23.0 or later. A Studio Luftbrücke
+Version 0.2.6. MIT. Needs Hermes 0.23.0 or later. A Studio Luftbrücke
 Hermes plugin. The full reference is in [docs/guide.md](docs/guide.md).
 
 ## What it does
@@ -112,7 +112,7 @@ the rest to its `config.yaml`.
 | --- | --- | --- |
 | Coolify URL (`COOLIFYBRUECKE_URL`) | The address you open Coolify at | none |
 | API token (`COOLIFYBRUECKE_TOKEN`) | Reads and acts. Recommended: `read` and `deploy`, all projects | none |
-| Protected environments (`protected_environments`) | Comma-separated. The agent may not act there; your own clicks work. Left empty, it means `production` | `production` |
+| Protected environments (`protected_environments`) | Comma-separated. The agent may not act there; your own clicks work. An empty or invalid value means `production` and produces a warning | `production` |
 | Agent may act on protected environments (`agent_on_protected`) | On: each agent action there still asks you, naming the environment | off |
 | Let the agent run actions (`agent_actions`) | Off: only your own clicks act | on |
 | Disk warning at (%) (`disk_warn_percent`) | A server at or over this disk use needs attention | 85 |
@@ -145,6 +145,10 @@ Which token setups unlock what, and the tool list: [docs/guide.md](docs/guide.md
   until you remove its entry (`plugin_rule:coolify_action:<action>:<uuid>`) from `command_allowlist`
   in the profile's `config.yaml`. Protected environments always ask. Details:
   [Actions and your approval](docs/guide.md#actions-and-your-approval).
+- **Hermes compatibility.** The unattended-turn check imports the private Hermes module
+  `gateway.session_finite`. If that import or check fails, the plugin treats the turn as unattended
+  and refuses the write. An interrupted request whose outcome is unknown says that it may have run;
+  it is never described as safe to repeat. A deployment id is checked before any request is sent.
 
 ## Disclosures
 
@@ -152,6 +156,8 @@ Which token setups unlock what, and the tool list: [docs/guide.md](docs/guide.md
 
 The plugin talks to the Coolify instance you configure, to Coolify's public release feed, and to
 the git hosts of your applications' repositories for "branch ahead". It calls nothing else.
+A remote `http://` Coolify address produces a warning because it sends tokens without encryption.
+Use HTTPS outside localhost.
 
 Every request to Coolify goes to `<your Coolify URL>/api/v1/...` or `<your Coolify URL>/mcp`, with
 one of your Coolify tokens as a Bearer token. A request to Coolify never follows a redirect: when the

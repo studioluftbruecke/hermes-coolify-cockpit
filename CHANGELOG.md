@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.7
+
+Update both halves: the plugin where Hermes runs and the one Hermes Desktop loads.
+
+- Apps rows get Stop and Start buttons, shown by the resource's state: Stop while it runs, Start
+  while it is stopped, neither while the state is unknown (start on a running app would queue a
+  full redeploy, and start hides while a deployment of the stopped app is in flight). New layouts
+  get all four row buttons; a stored layout keeps the buttons it saved, and the Edit UI lists Stop
+  and Start. Every click keeps its confirm, and Stop always sends `docker_cleanup=false`.
+- A deliberately stopped app reads `exited:unhealthy`; its dot showed a health warning instead of
+  the stopped colour.
+- An invalid `protected_environments` value, including `false` and `off`, keeps `production`
+  protected and produces a setup warning.
+- A malformed deployment id is refused before any HTTP request.
+- A reset or timeout while a request body is being written counts as possibly sent. Only a failure
+  proven to precede the request counts as unsent.
+- A remote plain-HTTP Coolify address warns that tokens travel without encryption. Local development
+  addresses keep working without that warning.
+
 ## 0.2.6
 
 Update both halves: the plugin where Hermes runs and the one Hermes Desktop loads.

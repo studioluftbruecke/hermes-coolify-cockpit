@@ -9,6 +9,7 @@ may have run, and the page says so before the user sends again.
 import dataclasses
 import importlib
 import socket
+import struct
 import threading
 
 import pytest
@@ -161,3 +162,54 @@ def test_a_request_that_left_without_an_answer_may_have_run(plugin, kit, local_h
     assert silent.received and silent.received[0].startswith("POST " + RESTART), silent.received
     assert result["ok"] is False and result["error"] == "unreachable", result
     assert result["sent"] is True, result
+
+
+class _ResetAfterPartialPost:
+    """Accepts a POST, reads only the start of a large body, then resets the connection."""
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.received = []
+        self.body_bytes = 0
+        self.done = threading.Event()
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        try:
+            conn, _ = self.sock.accept()
+            with conn:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        return
+                    data += chunk
+                headers, _, body = data.partition(b"\r\n\r\n")
+                self.received.append(headers.split(b"\r\n", 1)[0].decode())
+                if len(body) < 1024:
+                    body += conn.recv(1024 - len(body))
+                self.body_bytes = len(body)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        finally:
+            self.done.set()
+
+    def close(self):
+        self.done.wait(2)
+        self.sock.close()
+
+
+def test_a_post_reset_while_the_body_is_sending_may_have_run(kit):
+    server = _ResetAfterPartialPost()
+    client = kit.client.CoolifyClient(f"http://127.0.0.1:{server.port}", "tok")
+    try:
+        with pytest.raises(kit.client.CoolifyError) as caught:
+            client.post("/deploy", json_body={"payload": "x" * (16 * 1024 * 1024)})
+    finally:
+        server.close()
+    assert server.received == ["POST /api/v1/deploy HTTP/1.1"]
+    assert 0 < server.body_bytes < 16 * 1024 * 1024
+    assert caught.value.kind.value == "unreachable"
+    assert caught.value.sent is True, caught.value
